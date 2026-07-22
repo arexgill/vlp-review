@@ -1,0 +1,21 @@
+{
+  "name": "vlp-review-poc",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local VLP-inspired review sessions for vibe-coded JavaScript and TypeScript",
+  "type": "module",
+  "bin": {
+    "vlp-review": "./bin/vlp-review.mjs"
+  },
+  "scripts": {
+    "start": "node ./bin/vlp-review.mjs",
+    "test": "node --test",
+    "test:watch": "node --test --watch"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.28.5"
+  }
+}

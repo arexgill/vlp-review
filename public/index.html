@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>VLP Review — Validate vibe-coded software</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#top" aria-label="VLP Review home">
+      <span class="brand-mark" aria-hidden="true">V</span>
+      <span>VLP Review</span>
+    </a>
+    <div class="local-badge"><span aria-hidden="true">●</span> Local only</div>
+    <p id="app-status" class="status" aria-live="polite">Loading review session…</p>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">Intent → documentation → validation</p>
+        <h1 id="page-title">Read the behavior.<br><em>Not every line.</em></h1>
+        <p class="lede">Review the places where generated code may have drifted from your prompt. Your source stays on this machine.</p>
+      </div>
+      <div id="session-stats" class="stats" aria-label="Session statistics"></div>
+    </section>
+
+    <div class="progress-shell" aria-label="Review progress">
+      <div class="progress-copy">
+        <span>Validation progress</span>
+        <strong id="review-progress" aria-live="polite">Preparing questions…</strong>
+      </div>
+      <div class="progress-track" aria-hidden="true"><span id="progress-fill"></span></div>
+    </div>
+
+    <section class="workspace" aria-label="VLP review workspace">
+      <div class="evidence-column">
+        <article class="panel prompt-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="step-label">01 · Intent</p>
+              <h2>Original prompt</h2>
+            </div>
+            <span class="panel-icon" aria-hidden="true">✦</span>
+          </div>
+          <pre class="prompt-view"><code id="prompt-content"></code></pre>
+        </article>
+
+        <article class="panel code-panel">
+          <div class="panel-heading code-heading">
+            <div>
+              <p class="step-label">02 · Implementation</p>
+              <h2>Generated code</h2>
+            </div>
+            <label class="file-picker">
+              <span class="sr-only">Choose source file</span>
+              <select id="source-select"></select>
+            </label>
+          </div>
+          <pre class="code-view" tabindex="0"><code id="source-code"></code></pre>
+        </article>
+
+        <article class="panel docs-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="step-label">03 · Observable semantics</p>
+              <h2>Literate documentation</h2>
+            </div>
+            <span class="panel-icon" aria-hidden="true">≡</span>
+          </div>
+          <p class="panel-intro">Syntax-directed statements extracted from the selected file. Select one to reveal its source.</p>
+          <div id="doc-list" class="doc-list"></div>
+          <div class="diagnostics-block">
+            <h3>Parse diagnostics</h3>
+            <div id="diagnostic-list"></div>
+          </div>
+        </article>
+      </div>
+
+      <aside class="review-column" aria-label="Targeted validation">
+        <article id="question-card" class="panel question-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="step-label">04 · Human judgment</p>
+              <h2>Targeted review</h2>
+            </div>
+            <span id="question-severity" class="severity">—</span>
+          </div>
+
+          <div class="question-copy">
+            <p id="question-type" class="question-type">Preparing question</p>
+            <h3 id="question-title">Analyzing intent traces…</h3>
+            <p id="question-ask" class="question-ask">The local analyzer is building your review queue.</p>
+            <p id="question-reason" class="question-reason"></p>
+          </div>
+
+          <div class="trace-block">
+            <h4>Prompt trace</h4>
+            <pre><code id="prompt-evidence">—</code></pre>
+          </div>
+
+          <div class="trace-block">
+            <h4>Code &amp; documentation trace</h4>
+            <div id="code-evidence" class="evidence-list"></div>
+          </div>
+
+          <label class="response-label" for="correction-text">
+            Your correction or comment
+            <span>Required only when correcting intent</span>
+          </label>
+          <textarea id="correction-text" rows="4" maxlength="4000" placeholder="Describe the behavior you actually intended…"></textarea>
+          <p id="response-error" class="response-error" aria-live="polite"></p>
+
+          <div class="decision-grid" aria-label="Review decision">
+            <button id="accept-button" type="button" class="decision accept">Accept behavior</button>
+            <button id="correct-button" type="button" class="decision correct">Correct intent</button>
+            <button id="irrelevant-button" type="button" class="decision irrelevant">Not relevant</button>
+          </div>
+
+          <div class="question-nav">
+            <button id="previous-button" type="button" class="quiet-button">← Previous</button>
+            <button id="next-button" type="button" class="quiet-button">Next →</button>
+          </div>
+          <button id="finish-button" type="button" class="finish-button">Generate repair brief</button>
+        </article>
+      </aside>
+    </section>
+
+    <section id="report-panel" class="panel report-panel" hidden aria-labelledby="report-title">
+      <div class="panel-heading">
+        <div>
+          <p class="step-label">05 · Agent handoff</p>
+          <h2 id="report-title">Repair-ready brief</h2>
+        </div>
+        <div class="report-actions">
+          <button id="copy-report" type="button" class="quiet-button">Copy Markdown</button>
+          <button id="download-report" type="button" class="finish-button compact">Download</button>
+        </div>
+      </div>
+      <pre class="report-view"><code id="report-output"></code></pre>
+    </section>
+
+    <section class="about" aria-labelledby="about-title">
+      <p class="eyebrow">Research context</p>
+      <h2 id="about-title">A practical sketch of verifiable literate programming</h2>
+      <div class="about-grid">
+        <p>This POC is inspired by Yuan et al., <cite>Guiding Human Validation of LLM-Generated Code via Verifiable Literate Programming</cite>, arXiv:2607.02333v1. The study reports VLP improving pass@1 from 28.7%–73.2% to 65.4%–93.5% across its evaluated settings.</p>
+        <p>This tool uses local AST analysis and transparent heuristics. It is not the full research implementation: there is no LLM mismatch detector, API knowledge base, formal literate grammar, or bounded model checking.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>VLP Review POC</span>
+    <span>Nothing leaves localhost.</span>
+  </footer>
+</body>
+</html>
