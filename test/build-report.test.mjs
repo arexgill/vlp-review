@@ -271,7 +271,10 @@ test('reports agent-approved validation when all results are automatic', () => {
   };
 
   const markdown = buildReport(session, [], { agentReview: approvedReview });
+  assert.match(markdown, /Agent review status: Agent approved/);
   assert.match(markdown, /Final validation status: Agent approved/);
+  assert.match(markdown, /Approved automatically: 4/);
+  assert.match(markdown, /Escalated: 0/);
   assert.doesNotMatch(markdown, /Completed with human resolution/);
 });
 
@@ -312,6 +315,35 @@ test('reports when agent review has not run yet', () => {
 
   assert.match(markdown, /Agent review status: Agent review has not run yet/);
   assert.match(markdown, /Final validation status: Needs human review/);
+});
+
+test('reports zero-question agent-approved sessions with no targeted mismatches', () => {
+  const markdown = buildReport({
+    id: 'zero',
+    prompt: 'p',
+    questions: [],
+    docUnits: [],
+    diagnostics: []
+  }, [], {
+    agentReview: {
+      status: 'approved',
+      provider: 'openai-compatible',
+      model: 'review-model',
+      threshold: 0.8,
+      startedAt: '2026-07-22T10:00:00.000Z',
+      completedAt: '2026-07-22T10:00:01.000Z',
+      summary: 'No targeted mismatches were available for agent review.',
+      results: [],
+      error: null
+    }
+  });
+
+  assert.match(markdown, /Agent review status: Agent approved/);
+  assert.match(markdown, /Final validation status: Agent approved/);
+  assert.match(markdown, /Approved automatically: 0/);
+  assert.match(markdown, /Escalated: 0/);
+  assert.match(markdown, /Agent approved: no targeted mismatches/);
+  assert.match(markdown, /Heuristics can miss semantic defects; this result is not a proof of correctness\./);
 });
 
 test('rejects browser responses that try to override agent-approved questions', () => {

@@ -106,7 +106,7 @@ function formatThreshold(value) {
 function agentReviewStatusLabel(status) {
   switch (clean(status)) {
     case 'approved':
-      return 'Approved automatically';
+      return 'Agent approved';
     case 'needs-human':
       return 'Needs human review';
     case 'failed':
@@ -372,6 +372,9 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
   const escalatedCount = results.filter(result => clean(result?.status) === 'escalated').length;
   const finalStatus = finalValidationStatus(agentReview, unresolved.length, escalatedCount);
   const repairInstructions = buildAgentRepairInstructions(session, questions, effectiveResponses, agentReview, finalStatus, escalatedCount);
+  const zeroQuestionNote = clean(agentReview?.status) === 'approved' && questions.length === 0
+    ? '- Review note: Agent approved: no targeted mismatches. Heuristics can miss semantic defects; this result is not a proof of correctness.'
+    : null;
 
   return [
     '# VLP Review Report',
@@ -396,12 +399,13 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
     `- Agent review status: ${agentReviewStatusLabel(agentReview?.status)}`,
     `- Final validation status: ${finalStatus}`,
     `- Policy threshold: ${formatThreshold(agentReview?.threshold)}`,
-    `- Automatic decisions: ${automaticCount}`,
-    `- Escalated decisions: ${escalatedCount}`,
+    `- Approved automatically: ${automaticCount}`,
+    `- Escalated: ${escalatedCount}`,
     `- Started at: ${cleanInline(agentReview?.startedAt) || 'Not available'}`,
     `- Completed at: ${cleanInline(agentReview?.completedAt) || 'Not available'}`,
     `- Reviewer summary: ${cleanInline(agentReview?.summary) || 'None provided.'}`,
     agentReview?.error ? `- Reviewer error: ${cleanInline(agentReview.error.message) || 'Unknown error'}` : '- Reviewer error: None',
+    zeroQuestionNote,
     '',
     auditItems.length ? auditItems.join('\n\n') : 'No agent review results were recorded.',
     '',
