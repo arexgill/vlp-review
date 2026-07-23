@@ -14,7 +14,7 @@
       <span class="brand-mark" aria-hidden="true">V</span>
       <span>VLP Review</span>
     </a>
-    <div class="local-badge"><span aria-hidden="true">●</span> Local only</div>
+    <div id="privacy-badge" class="local-badge"><span aria-hidden="true">●</span> Local only</div>
     <p id="app-status" class="status" aria-live="polite">Loading review session…</p>
   </header>
 
@@ -23,9 +23,23 @@
       <div>
         <p class="eyebrow">Intent → documentation → validation</p>
         <h1 id="page-title">Read the behavior.<br><em>Not every line.</em></h1>
-        <p class="lede">Review the places where generated code may have drifted from your prompt. Your source stays on this machine.</p>
+        <p id="privacy-copy" class="lede">Review the places where generated code may have drifted from your prompt. Local mode keeps the review on this machine.</p>
       </div>
       <div id="session-stats" class="stats" aria-label="Session statistics"></div>
+    </section>
+
+    <section id="reviewer-panel" class="panel reviewer-panel" hidden aria-labelledby="reviewer-mode">
+      <div class="panel-heading">
+        <div>
+          <p class="step-label">Agent review</p>
+          <h2 id="reviewer-mode">Local review mode</h2>
+        </div>
+        <button id="reviewer-run-button" type="button" class="quiet-button">Run agent review</button>
+      </div>
+      <div class="reviewer-grid">
+        <p id="reviewer-disclosure" class="reviewer-copy">Remote agent mode sends the prompt and linked excerpts.</p>
+        <p id="reviewer-status" class="review-status" aria-live="polite">Agent review has not run yet.</p>
+      </div>
     </section>
 
     <div class="progress-shell" aria-label="Review progress">
@@ -84,7 +98,7 @@
         <article id="question-card" class="panel question-panel">
           <div class="panel-heading">
             <div>
-              <p class="step-label">04 · Human judgment</p>
+              <p class="step-label">04 · Validation judgment</p>
               <h2>Targeted review</h2>
             </div>
             <span id="question-severity" class="severity">—</span>
@@ -95,6 +109,17 @@
             <h3 id="question-title">Analyzing intent traces…</h3>
             <p id="question-ask" class="question-ask">The local analyzer is building your review queue.</p>
             <p id="question-reason" class="question-reason"></p>
+          </div>
+
+          <div id="agent-audit" class="agent-audit" hidden aria-live="polite">
+            <h4>Agent review audit</h4>
+            <dl>
+              <div><dt>Decision</dt><dd id="agent-decision">—</dd></div>
+              <div><dt>Confidence</dt><dd id="agent-confidence">—</dd></div>
+              <div><dt>Intent basis</dt><dd id="agent-intent">—</dd></div>
+              <div><dt>Rationale</dt><dd id="agent-rationale">—</dd></div>
+              <div><dt>Escalation reasons</dt><dd id="agent-escalation">—</dd></div>
+            </dl>
           </div>
 
           <div class="trace-block">
@@ -155,7 +180,7 @@
 
   <footer>
     <span>VLP Review POC</span>
-    <span>Nothing leaves localhost.</span>
+    <span>Local by default · explicit remote review only</span>
   </footer>
 </body>
 </html>

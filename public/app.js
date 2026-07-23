@@ -1,5 +1,7 @@
 const state = {
   session: null,
+  agentReview: null,
+  agentPolling: null,
   sourceIndex: 0,
   questionIndex: 0,
   responses: new Map(),
@@ -7,15 +9,30 @@ const state = {
 };
 
 const ids = [
-  'app-status', 'session-stats', 'prompt-content', 'source-select', 'source-code',
-  'doc-list', 'diagnostic-list', 'review-progress', 'progress-fill', 'question-card',
-  'question-title', 'question-ask', 'question-type', 'question-severity', 'question-reason',
-  'prompt-evidence', 'code-evidence', 'correction-text', 'response-error',
+  'app-status', 'session-stats', 'privacy-badge', 'privacy-copy', 'reviewer-panel',
+  'reviewer-mode', 'reviewer-disclosure', 'reviewer-status', 'reviewer-run-button',
+  'prompt-content', 'source-select', 'source-code', 'doc-list', 'diagnostic-list',
+  'review-progress', 'progress-fill', 'question-card', 'question-title', 'question-ask',
+  'question-type', 'question-severity', 'question-reason', 'prompt-evidence',
+  'code-evidence', 'agent-audit', 'agent-decision', 'agent-confidence', 'agent-intent',
+  'agent-rationale', 'agent-escalation', 'correction-text', 'response-error',
   'accept-button', 'correct-button', 'irrelevant-button', 'previous-button',
   'next-button', 'finish-button', 'report-panel', 'report-output', 'copy-report',
   'download-report'
 ];
 const elements = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
+
+const LOCAL_PRIVACY_COPY = 'Review the places where generated code may have drifted from your prompt. Local mode keeps the review on this machine.';
+const REMOTE_PRIVACY_COPY = 'Review the places where generated code may have drifted from your prompt. Remote agent mode sends the prompt and linked excerpts to your configured reviewer.';
+const REVIEW_STATUS_LABELS = {
+  ready: 'Agent review has not run yet.',
+  running: 'Agent review is running.',
+  approved: 'Agent approved every targeted question.',
+  'needs-human': 'Agent review needs human follow-up.',
+  failed: 'Agent review could not complete safely.'
+};
+const MANUAL_DECISIONS = new Set(['accept', 'correct', 'irrelevant']);
+const EFFECTIVE_AGENT_STATUSES = new Set(['approved', 'needs-human']);
 
 function storageKey() {
   return state.session ? `vlp-review:${state.session.id}` : 'vlp-review:pending';
@@ -33,19 +50,48 @@ function makeElement(tag, className, text) {
   return element;
 }
 
-async function loadSession() {
-  try {
-    const response = await fetch('/api/session', { headers: { accept: 'application/json' } });
-    if (!response.ok) throw new Error(`Session request failed (${response.status})`);
-    state.session = await response.json();
-    restoreResponses();
-    elements['prompt-content'].textContent = state.session.prompt;
-    renderAll();
-    setStatus('Review session ready', 'success');
-  } catch (error) {
-    setStatus(error.message, 'error');
-    elements['question-title'].textContent = 'The local session could not be loaded.';
-    elements['question-ask'].textContent = 'Return to the terminal for the server error, then restart VLP Review.';
+function setBadge(text, remote = false) {
+  const badge = elements['privacy-badge'];
+  const dot = makeElement('span', '', '●');
+  dot.setAttribute('aria-hidden', 'true');
+  badge.className = remote ? 'local-badge remote-badge' : 'local-badge';
+  badge.replaceChildren(dot, document.createTextNode(` ${text}`));
+}
+
+function clearAgentPolling() {
+  if (state.agentPolling) {
+    clearTimeout(state.agentPolling);
+    state.agentPolling = null;
+  }
+}
+
+function agentResult(questionId) {
+  return state.agentReview?.results?.find(result => result.questionId === questionId) || null;
+}
+
+function isAgentMode() {
+  return state.agentReview && state.agentReview.status !== 'not-configured';
+}
+
+function humanResponses() {
+  if (!isAgentMode()) return [...state.responses.values()];
+  const escalated = new Set(
+    (state.agentReview.results || [])
+      .filter(result => result.status === 'escalated')
+      .map(result => result.questionId)
+  );
+  return [...state.responses.values()].filter(response => escalated.has(response.questionId));
+}
+
+function pruneResponsesToEscalated() {
+  if (!isAgentMode()) return;
+  const allowed = new Set(
+    (state.agentReview?.results || [])
+      .filter(result => result.status === 'escalated')
+      .map(result => result.questionId)
+  );
+  for (const questionId of [...state.responses.keys()]) {
+    if (!allowed.has(questionId)) state.responses.delete(questionId);
   }
 }
 
@@ -55,8 +101,12 @@ function restoreResponses() {
     const stored = JSON.parse(localStorage.getItem(storageKey()) || '[]');
     if (!Array.isArray(stored)) return;
     for (const response of stored) {
-      if (['accept', 'correct', 'irrelevant'].includes(response.decision)) {
-        state.responses.set(response.questionId, response);
+      if (MANUAL_DECISIONS.has(response?.decision) && typeof response.questionId === 'string') {
+        state.responses.set(response.questionId, {
+          questionId: response.questionId,
+          decision: response.decision,
+          answer: typeof response.answer === 'string' ? response.answer : ''
+        });
       }
     }
   } catch {
@@ -65,10 +115,178 @@ function restoreResponses() {
 }
 
 function persistResponses() {
-  localStorage.setItem(storageKey(), JSON.stringify([...state.responses.values()]));
+  localStorage.setItem(storageKey(), JSON.stringify(humanResponses()));
+}
+
+function syncAgentPolling() {
+  if (state.agentReview?.status !== 'running') {
+    clearAgentPolling();
+    return;
+  }
+  if (state.agentPolling) return;
+  state.agentPolling = setTimeout(async () => {
+    state.agentPolling = null;
+    await fetchAgentReview();
+  }, 1000);
+}
+
+function reviewerModeLabel(review) {
+  if (!review || review.status === 'not-configured') return 'Local review mode';
+  const provider = review.provider || 'Remote reviewer';
+  const model = review.model || 'configured model';
+  return `${provider} / ${model}`;
+}
+
+function reviewerDisclosure(review) {
+  if (!review || review.status === 'not-configured') {
+    return 'Local mode keeps the prompt and evidence on this machine.';
+  }
+  return `Remote agent mode sends the prompt and linked excerpts to ${review.provider || 'your configured reviewer'}${review.model ? ` (${review.model})` : ''}.`;
+}
+
+function reviewerStatusMessage(review) {
+  if (!review) return 'Loading reviewer state…';
+  const base = REVIEW_STATUS_LABELS[review.status] || 'Reviewer state unavailable.';
+  return review?.error?.message ? `${base} ${review.error.message}` : base;
+}
+
+function setQuestionControls({ disabled, selectedDecision = null, answer = '', error = '', placeholder = 'Describe the behavior you actually intended…' }) {
+  const decisions = ['accept', 'correct', 'irrelevant'];
+  const buttons = [elements['accept-button'], elements['correct-button'], elements['irrelevant-button']];
+  elements['correction-text'].disabled = disabled;
+  elements['correction-text'].value = answer;
+  elements['correction-text'].placeholder = placeholder;
+  elements['response-error'].textContent = error;
+  buttons.forEach((button, index) => {
+    button.disabled = disabled;
+    button.classList.toggle('selected', selectedDecision === decisions[index]);
+  });
+}
+
+function setAgentAudit(result, reviewStatus) {
+  const audit = elements['agent-audit'];
+  if (!result) {
+    audit.hidden = true;
+    audit.dataset.status = '';
+    return;
+  }
+  audit.hidden = false;
+  audit.dataset.status = result.status || reviewStatus || '';
+  const approved = result.status === 'approved' && EFFECTIVE_AGENT_STATUSES.has(reviewStatus);
+  elements['agent-decision'].textContent = approved
+    ? `${result.effectiveDecision || 'unknown'} · approved automatically`
+    : `${result.proposedDecision || 'no proposal'} · ${result.status === 'escalated' ? 'needs human review' : 'pending review state'}`;
+  elements['agent-confidence'].textContent = typeof result.confidence === 'number'
+    ? `${Math.round(result.confidence * 100)}%`
+    : 'Not provided';
+  elements['agent-intent'].textContent = result.intentBasis || 'Not provided';
+  elements['agent-rationale'].textContent = result.rationale || 'No rationale provided.';
+  elements['agent-escalation'].textContent = result.escalationReasons?.length
+    ? result.escalationReasons.join(', ')
+    : 'None';
+}
+
+function effectiveReviewedCount() {
+  if (!state.session) return 0;
+  if (!isAgentMode()) return state.responses.size;
+  const byId = new Map((state.agentReview?.results || []).map(result => [result.questionId, result]));
+  return state.session.questions.reduce((count, question) => {
+    const result = byId.get(question.id);
+    if (!result) return count;
+    if (result.status === 'approved' && state.agentReview.status === 'approved') return count + 1;
+    if (result.status === 'approved' && state.agentReview.status === 'needs-human') return count + 1;
+    if (result.status === 'escalated' && state.agentReview.status === 'needs-human' && state.responses.has(question.id)) return count + 1;
+    return count;
+  }, 0);
+}
+
+async function loadApp() {
+  try {
+    const [sessionResponse, reviewResponse] = await Promise.all([
+      fetch('/api/session', { headers: { accept: 'application/json' } }),
+      fetch('/api/agent-review', { headers: { accept: 'application/json' } })
+    ]);
+    if (!sessionResponse.ok) throw new Error(`Session request failed (${sessionResponse.status})`);
+    if (!reviewResponse.ok) throw new Error(`Reviewer request failed (${reviewResponse.status})`);
+    state.session = await sessionResponse.json();
+    state.agentReview = await reviewResponse.json();
+    restoreResponses();
+    pruneResponsesToEscalated();
+    persistResponses();
+    elements['prompt-content'].textContent = state.session.prompt;
+    renderAll();
+    syncAgentPolling();
+    setStatus('Review session ready', 'success');
+  } catch (error) {
+    clearAgentPolling();
+    setStatus(error.message, 'error');
+    elements['question-title'].textContent = 'The local session could not be loaded.';
+    elements['question-ask'].textContent = 'Return to the terminal for the server error, then restart VLP Review.';
+  }
+}
+
+async function fetchAgentReview() {
+  try {
+    const response = await fetch('/api/agent-review', { headers: { accept: 'application/json' } });
+    if (!response.ok) throw new Error(`Reviewer request failed (${response.status})`);
+    state.agentReview = await response.json();
+    pruneResponsesToEscalated();
+    persistResponses();
+    renderAll();
+    syncAgentPolling();
+  } catch (error) {
+    clearAgentPolling();
+    if (isAgentMode()) {
+      state.agentReview = {
+        ...state.agentReview,
+        status: 'failed',
+        error: { code: 'reviewer-request-failed', message: error.message }
+      };
+      renderAll();
+    }
+    setStatus(error.message, 'error');
+  }
+}
+
+async function runAgentReview() {
+  if (!isAgentMode() || state.agentReview.status === 'running') return;
+  state.agentReview = {
+    ...state.agentReview,
+    status: 'running',
+    error: null
+  };
+  renderAll();
+  syncAgentPolling();
+  try {
+    setStatus('Running agent review…');
+    const response = await fetch('/api/agent-review', {
+      method: 'POST',
+      headers: { accept: 'application/json' }
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `Reviewer request failed (${response.status})`);
+    state.agentReview = payload;
+    pruneResponsesToEscalated();
+    persistResponses();
+    renderAll();
+    syncAgentPolling();
+    const tone = payload.status === 'failed' ? 'error' : 'success';
+    setStatus(reviewerStatusMessage(payload), tone);
+  } catch (error) {
+    clearAgentPolling();
+    state.agentReview = {
+      ...state.agentReview,
+      status: 'failed',
+      error: { code: 'reviewer-request-failed', message: error.message }
+    };
+    renderAll();
+    setStatus(error.message, 'error');
+  }
 }
 
 function renderAll() {
+  renderPrivacy();
+  renderReviewer();
   renderStats();
   renderSource();
   renderDocumentation();
@@ -76,11 +294,41 @@ function renderAll() {
   renderQuestion();
 }
 
+function renderPrivacy() {
+  if (isAgentMode()) {
+    setBadge('Remote agent', true);
+    elements['privacy-copy'].textContent = REMOTE_PRIVACY_COPY;
+    return;
+  }
+  setBadge('Local only');
+  elements['privacy-copy'].textContent = LOCAL_PRIVACY_COPY;
+}
+
+function renderReviewer() {
+  const review = state.agentReview;
+  if (!review || review.status === 'not-configured') {
+    elements['reviewer-panel'].hidden = true;
+    return;
+  }
+  elements['reviewer-panel'].hidden = false;
+  elements['reviewer-mode'].textContent = reviewerModeLabel(review);
+  elements['reviewer-disclosure'].textContent = reviewerDisclosure(review);
+  elements['reviewer-status'].textContent = reviewerStatusMessage(review);
+  elements['reviewer-status'].dataset.state = review.status || 'ready';
+  elements['reviewer-run-button'].disabled = review.status === 'running';
+  elements['reviewer-run-button'].textContent = review.status === 'running'
+    ? 'Reviewing…'
+    : (review.completedAt || review.status === 'failed' || review.status === 'needs-human' || review.status === 'approved')
+      ? 'Re-run agent review'
+      : 'Run agent review';
+}
+
 function renderStats() {
+  if (!state.session) return;
   const stats = [
-    [state.session.meta.sourceCount, 'Source files'],
-    [state.session.meta.docUnitCount, 'Behavior traces'],
-    [state.session.meta.questionCount, 'Review questions']
+    [state.session.meta?.sourceCount ?? state.session.sources.length, 'Source files'],
+    [state.session.meta?.docUnitCount ?? state.session.docUnits.length, 'Behavior traces'],
+    [state.session.meta?.questionCount ?? state.session.questions.length, 'Review questions']
   ];
   elements['session-stats'].replaceChildren();
   for (const [value, label] of stats) {
@@ -91,6 +339,7 @@ function renderStats() {
 }
 
 function renderSource() {
+  if (!state.session) return;
   const select = elements['source-select'];
   select.replaceChildren();
   state.session.sources.forEach((source, index) => {
@@ -115,6 +364,7 @@ function renderSource() {
 }
 
 function showSourceEvidence(unit) {
+  if (!state.session) return;
   const index = state.session.sources.findIndex(source => source.path === unit.file);
   if (index >= 0) state.sourceIndex = index;
   renderSource();
@@ -129,6 +379,7 @@ function showSourceEvidence(unit) {
 }
 
 function renderDocumentation() {
+  if (!state.session) return;
   const list = elements['doc-list'];
   list.replaceChildren();
   const source = state.session.sources[state.sourceIndex];
@@ -152,6 +403,7 @@ function renderDocumentation() {
 }
 
 function renderDiagnostics() {
+  if (!state.session) return;
   const list = elements['diagnostic-list'];
   list.replaceChildren();
   const source = state.session.sources[state.sourceIndex];
@@ -166,13 +418,13 @@ function renderDiagnostics() {
 }
 
 function linkedUnits(question) {
-  const ids = new Set(question?.docUnitIds || []);
-  return state.session.docUnits.filter(unit => ids.has(unit.id));
+  const linkedIds = new Set(question?.docUnitIds || []);
+  return state.session.docUnits.filter(unit => linkedIds.has(unit.id));
 }
 
 function renderProgress() {
   const total = state.session.questions.length;
-  const reviewed = state.responses.size;
+  const reviewed = effectiveReviewedCount();
   elements['review-progress'].textContent = total
     ? `${reviewed} of ${total} reviewed · question ${state.questionIndex + 1}`
     : 'No targeted questions · report available';
@@ -181,14 +433,16 @@ function renderProgress() {
 }
 
 function renderQuestion() {
+  if (!state.session) return;
   renderProgress();
   const questions = state.session.questions;
   const question = questions[state.questionIndex];
-  const decisionButtons = [elements['accept-button'], elements['correct-button'], elements['irrelevant-button']];
+  const reviewStatus = state.agentReview?.status || 'not-configured';
   elements['response-error'].textContent = '';
   elements['code-evidence'].replaceChildren();
 
   if (!question) {
+    setAgentAudit(null, reviewStatus);
     elements['question-severity'].textContent = 'clear';
     elements['question-severity'].className = 'severity low';
     elements['question-type'].textContent = 'No heuristic flags';
@@ -197,15 +451,15 @@ function renderQuestion() {
     elements['question-reason'].textContent = 'Heuristics can miss semantic defects; this result is not a proof of correctness.';
     elements['prompt-evidence'].textContent = 'No targeted prompt trace.';
     elements['code-evidence'].append(makeElement('p', 'empty-state', 'No source trace linked.'));
-    elements['correction-text'].value = '';
-    decisionButtons.forEach(button => { button.disabled = true; button.classList.remove('selected'); });
+    setQuestionControls({ disabled: true, selectedDecision: null, answer: '' });
     elements['previous-button'].disabled = true;
     elements['next-button'].disabled = true;
-    elements['finish-button'].disabled = false;
+    elements['finish-button'].disabled = reviewStatus === 'running';
     return;
   }
 
   const response = state.responses.get(question.id);
+  const result = agentResult(question.id);
   elements['question-severity'].textContent = question.severity;
   elements['question-severity'].className = `severity ${question.severity}`;
   elements['question-type'].textContent = question.type.replaceAll('-', ' ');
@@ -213,7 +467,6 @@ function renderQuestion() {
   elements['question-ask'].textContent = question.ask;
   elements['question-reason'].textContent = question.reason;
   elements['prompt-evidence'].textContent = question.promptEvidence || 'No direct prompt sentence was linked.';
-  elements['correction-text'].value = response?.answer || '';
 
   const units = linkedUnits(question);
   if (units.length === 0) {
@@ -231,19 +484,54 @@ function renderQuestion() {
     }
   }
 
-  const decisions = ['accept', 'correct', 'irrelevant'];
-  decisionButtons.forEach((button, index) => {
-    button.disabled = false;
-    button.classList.toggle('selected', response?.decision === decisions[index]);
-  });
+  if (!isAgentMode()) {
+    setAgentAudit(null, reviewStatus);
+    setQuestionControls({
+      disabled: false,
+      selectedDecision: response?.decision || null,
+      answer: response?.answer || ''
+    });
+  } else {
+    setAgentAudit(result, reviewStatus);
+    if (result?.status === 'approved') {
+      setQuestionControls({
+        disabled: true,
+        selectedDecision: result.effectiveDecision || null,
+        answer: result.answer || '',
+        placeholder: 'Approved automatically by the configured reviewer.'
+      });
+    } else if (result?.status === 'escalated' && reviewStatus === 'needs-human') {
+      setQuestionControls({
+        disabled: false,
+        selectedDecision: response?.decision || null,
+        answer: response?.answer || ''
+      });
+    } else {
+      setQuestionControls({
+        disabled: true,
+        selectedDecision: null,
+        answer: '',
+        placeholder: reviewStatus === 'running'
+          ? 'Reviewing…'
+          : reviewStatus === 'failed'
+            ? 'Re-run the agent review before answering questions.'
+            : 'Run the agent review to unlock human follow-up for escalated questions.'
+      });
+    }
+  }
+
   elements['previous-button'].disabled = state.questionIndex === 0;
   elements['next-button'].disabled = state.questionIndex >= questions.length - 1;
-  elements['finish-button'].disabled = false;
+  elements['finish-button'].disabled = reviewStatus === 'running';
 }
 
 function saveDecision(decision) {
-  const question = state.session.questions[state.questionIndex];
+  const question = state.session?.questions[state.questionIndex];
   if (!question) return;
+  if (isAgentMode()) {
+    const result = agentResult(question.id);
+    if (!result || result.status !== 'escalated' || state.agentReview.status !== 'needs-human') return;
+  }
   const answer = elements['correction-text'].value.trim();
   if (decision === 'correct' && !answer) {
     elements['response-error'].textContent = 'Describe the intended behavior before marking this as a correction.';
@@ -282,7 +570,7 @@ async function finishReview() {
     const response = await fetch('/api/report', {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({ responses: [...state.responses.values()] })
+      body: JSON.stringify({ responses: humanResponses() })
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `Report request failed (${response.status})`);
@@ -294,7 +582,7 @@ async function finishReview() {
   } catch (error) {
     setStatus(error.message, 'error');
   } finally {
-    elements['finish-button'].disabled = false;
+    elements['finish-button'].disabled = state.agentReview?.status === 'running';
   }
 }
 
@@ -336,9 +624,10 @@ function bindEvents() {
   elements['previous-button'].addEventListener('click', () => moveQuestion(-1));
   elements['next-button'].addEventListener('click', () => moveQuestion(1));
   elements['finish-button'].addEventListener('click', finishReview);
+  elements['reviewer-run-button'].addEventListener('click', runAgentReview);
   elements['copy-report'].addEventListener('click', copyReport);
   elements['download-report'].addEventListener('click', downloadReport);
 }
 
 bindEvents();
-loadSession();
+loadApp();
