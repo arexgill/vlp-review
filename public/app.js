@@ -29,7 +29,8 @@ const REVIEW_STATUS_LABELS = {
   running: 'Agent review is running.',
   approved: 'Agent approved every targeted question.',
   'needs-human': 'Agent review needs human follow-up.',
-  failed: 'Agent review could not complete safely.'
+  failed: 'Agent review could not complete safely.',
+  unavailable: 'Reviewer state could not be loaded.'
 };
 const MANUAL_DECISIONS = new Set(['accept', 'correct', 'irrelevant']);
 const EFFECTIVE_AGENT_STATUSES = new Set(['approved', 'needs-human']);
@@ -73,8 +74,33 @@ function isAgentMode() {
   return state.agentReview && state.agentReview.status !== 'not-configured';
 }
 
+function hasEffectiveAgentReview() {
+  return EFFECTIVE_AGENT_STATUSES.has(state.agentReview?.status);
+}
+
+function reviewerUnavailableState(error, base = state.agentReview) {
+  return {
+    status: 'unavailable',
+    provider: base?.provider || null,
+    model: base?.model || null,
+    threshold: base?.threshold ?? 0.8,
+    startedAt: base?.startedAt || null,
+    completedAt: base?.completedAt || null,
+    summary: base?.summary || '',
+    results: Array.isArray(base?.results) ? base.results : [],
+    error: { code: 'reviewer-request-failed', message: error.message }
+  };
+}
+
+function clearReport() {
+  state.report = '';
+  elements['report-output'].textContent = '';
+  elements['report-panel'].hidden = true;
+}
+
 function humanResponses() {
   if (!isAgentMode()) return [...state.responses.values()];
+  if (!hasEffectiveAgentReview()) return [];
   const escalated = new Set(
     (state.agentReview.results || [])
       .filter(result => result.status === 'escalated')
@@ -85,6 +111,10 @@ function humanResponses() {
 
 function pruneResponsesToEscalated() {
   if (!isAgentMode()) return;
+  if (!hasEffectiveAgentReview()) {
+    state.responses.clear();
+    return;
+  }
   const allowed = new Set(
     (state.agentReview?.results || [])
       .filter(result => result.status === 'escalated')
@@ -171,11 +201,12 @@ function setAgentAudit(result, reviewStatus) {
     return;
   }
   audit.hidden = false;
-  audit.dataset.status = result.status || reviewStatus || '';
   const approved = result.status === 'approved' && EFFECTIVE_AGENT_STATUSES.has(reviewStatus);
+  const escalated = result.status === 'escalated' && EFFECTIVE_AGENT_STATUSES.has(reviewStatus);
+  audit.dataset.status = approved ? 'approved' : escalated ? 'escalated' : 'inactive';
   elements['agent-decision'].textContent = approved
     ? `${result.effectiveDecision || 'unknown'} · approved automatically`
-    : `${result.proposedDecision || 'no proposal'} · ${result.status === 'escalated' ? 'needs human review' : 'pending review state'}`;
+    : `${result.proposedDecision || result.effectiveDecision || 'no proposal'} · ${escalated ? 'needs human review' : 'pending review state'}`;
   elements['agent-confidence'].textContent = typeof result.confidence === 'number'
     ? `${Math.round(result.confidence * 100)}%`
     : 'Not provided';
@@ -189,12 +220,12 @@ function setAgentAudit(result, reviewStatus) {
 function effectiveReviewedCount() {
   if (!state.session) return 0;
   if (!isAgentMode()) return state.responses.size;
+  if (!hasEffectiveAgentReview()) return 0;
   const byId = new Map((state.agentReview?.results || []).map(result => [result.questionId, result]));
   return state.session.questions.reduce((count, question) => {
     const result = byId.get(question.id);
     if (!result) return count;
-    if (result.status === 'approved' && state.agentReview.status === 'approved') return count + 1;
-    if (result.status === 'approved' && state.agentReview.status === 'needs-human') return count + 1;
+    if (result.status === 'approved') return count + 1;
     if (result.status === 'escalated' && state.agentReview.status === 'needs-human' && state.responses.has(question.id)) return count + 1;
     return count;
   }, 0);
@@ -202,20 +233,28 @@ function effectiveReviewedCount() {
 
 async function loadApp() {
   try {
-    const [sessionResponse, reviewResponse] = await Promise.all([
-      fetch('/api/session', { headers: { accept: 'application/json' } }),
-      fetch('/api/agent-review', { headers: { accept: 'application/json' } })
-    ]);
+    const sessionResponse = await fetch('/api/session', { headers: { accept: 'application/json' } });
     if (!sessionResponse.ok) throw new Error(`Session request failed (${sessionResponse.status})`);
-    if (!reviewResponse.ok) throw new Error(`Reviewer request failed (${reviewResponse.status})`);
     state.session = await sessionResponse.json();
-    state.agentReview = await reviewResponse.json();
+    elements['prompt-content'].textContent = state.session.prompt;
+
+    try {
+      const reviewResponse = await fetch('/api/agent-review', { headers: { accept: 'application/json' } });
+      if (!reviewResponse.ok) throw new Error(`Reviewer request failed (${reviewResponse.status})`);
+      state.agentReview = await reviewResponse.json();
+    } catch (error) {
+      state.agentReview = reviewerUnavailableState(error);
+    }
+
     restoreResponses();
     pruneResponsesToEscalated();
     persistResponses();
-    elements['prompt-content'].textContent = state.session.prompt;
     renderAll();
     syncAgentPolling();
+    if (state.agentReview?.status === 'unavailable') {
+      setStatus(reviewerStatusMessage(state.agentReview), 'error');
+      return;
+    }
     setStatus('Review session ready', 'success');
   } catch (error) {
     clearAgentPolling();
@@ -235,13 +274,17 @@ async function fetchAgentReview() {
     renderAll();
     syncAgentPolling();
   } catch (error) {
-    clearAgentPolling();
-    if (isAgentMode()) {
+    if (state.agentReview?.status === 'running') {
       state.agentReview = {
         ...state.agentReview,
-        status: 'failed',
-        error: { code: 'reviewer-request-failed', message: error.message }
+        error: { code: 'reviewer-sync-failed', message: error.message }
       };
+      renderAll();
+      syncAgentPolling();
+    } else if (isAgentMode()) {
+      state.agentReview = reviewerUnavailableState(error);
+      pruneResponsesToEscalated();
+      persistResponses();
       renderAll();
     }
     setStatus(error.message, 'error');
@@ -249,12 +292,20 @@ async function fetchAgentReview() {
 }
 
 async function runAgentReview() {
+  if (state.agentReview?.status === 'unavailable') {
+    await fetchAgentReview();
+    return;
+  }
   if (!isAgentMode() || state.agentReview.status === 'running') return;
   state.agentReview = {
     ...state.agentReview,
     status: 'running',
+    completedAt: null,
     error: null
   };
+  state.responses.clear();
+  clearReport();
+  persistResponses();
   renderAll();
   syncAgentPolling();
   try {
@@ -273,13 +324,12 @@ async function runAgentReview() {
     const tone = payload.status === 'failed' ? 'error' : 'success';
     setStatus(reviewerStatusMessage(payload), tone);
   } catch (error) {
-    clearAgentPolling();
     state.agentReview = {
       ...state.agentReview,
-      status: 'failed',
       error: { code: 'reviewer-request-failed', message: error.message }
     };
     renderAll();
+    syncAgentPolling();
     setStatus(error.message, 'error');
   }
 }
@@ -318,9 +368,11 @@ function renderReviewer() {
   elements['reviewer-run-button'].disabled = review.status === 'running';
   elements['reviewer-run-button'].textContent = review.status === 'running'
     ? 'Reviewing…'
-    : (review.completedAt || review.status === 'failed' || review.status === 'needs-human' || review.status === 'approved')
-      ? 'Re-run agent review'
-      : 'Run agent review';
+    : review.status === 'unavailable'
+      ? 'Retry reviewer status'
+      : (review.completedAt || review.status === 'failed' || review.status === 'needs-human' || review.status === 'approved')
+        ? 'Re-run agent review'
+        : 'Run agent review';
 }
 
 function renderStats() {
@@ -493,7 +545,7 @@ function renderQuestion() {
     });
   } else {
     setAgentAudit(result, reviewStatus);
-    if (result?.status === 'approved') {
+    if (result?.status === 'approved' && hasEffectiveAgentReview()) {
       setQuestionControls({
         disabled: true,
         selectedDecision: result.effectiveDecision || null,
@@ -515,7 +567,9 @@ function renderQuestion() {
           ? 'Reviewing…'
           : reviewStatus === 'failed'
             ? 'Re-run the agent review before answering questions.'
-            : 'Run the agent review to unlock human follow-up for escalated questions.'
+            : reviewStatus === 'unavailable'
+              ? 'Retry reviewer status before answering questions.'
+              : 'Run the agent review to unlock human follow-up for escalated questions.'
       });
     }
   }
