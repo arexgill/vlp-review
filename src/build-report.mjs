@@ -5,6 +5,18 @@ const MAX_ANSWER_LENGTH = 4000;
 const EFFECTIVE_AGENT_STATUSES = new Set(['approved', 'needs-human']);
 const INVALID_EFFECTIVE_DECISION_REASON = 'Approved agent result had an invalid or incomplete effective decision.';
 
+export class InvalidReportResponseError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'InvalidReportResponseError';
+    this.code = 'INVALID_REPORT_RESPONSES';
+  }
+}
+
+function invalidReportResponse(message) {
+  return new InvalidReportResponseError(message);
+}
+
 function clean(value) {
   return String(value ?? '').replaceAll('\0', '').replace(/\r\n?/g, '\n').trim();
 }
@@ -26,7 +38,7 @@ function questionMap(session) {
 }
 
 function validateResponses(session, responses) {
-  if (!Array.isArray(responses)) throw new Error('Responses must be an array');
+  if (!Array.isArray(responses)) throw invalidReportResponse('Responses must be an array');
   const questions = questionMap(session);
   const seen = new Set();
 
@@ -34,12 +46,12 @@ function validateResponses(session, responses) {
     const questionId = clean(response?.questionId);
     const decision = clean(response?.decision);
     const answer = clean(response?.answer);
-    if (!questions.has(questionId)) throw new Error(`Unknown question: ${questionId}`);
-    if (!DECISIONS.has(decision)) throw new Error(`Invalid decision: ${decision}`);
-    if (seen.has(questionId)) throw new Error(`Duplicate response: ${questionId}`);
-    if (decision === 'correct' && !answer) throw new Error(`Correction text is required for ${questionId}`);
+    if (!questions.has(questionId)) throw invalidReportResponse(`Unknown question: ${questionId}`);
+    if (!DECISIONS.has(decision)) throw invalidReportResponse(`Invalid decision: ${decision}`);
+    if (seen.has(questionId)) throw invalidReportResponse(`Duplicate response: ${questionId}`);
+    if (decision === 'correct' && !answer) throw invalidReportResponse(`Correction text is required for ${questionId}`);
     if (answer.length > MAX_ANSWER_LENGTH) {
-      throw new Error(`Answer for ${questionId} exceeds ${MAX_ANSWER_LENGTH} characters`);
+      throw invalidReportResponse(`Answer for ${questionId} exceeds ${MAX_ANSWER_LENGTH} characters`);
     }
     seen.add(questionId);
     return { questionId, decision, answer };
@@ -456,23 +468,23 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
   for (const response of humanResponses) {
     const responseGroup = resultGroups.get(response.questionId);
     if (responseGroup && responseGroup.length > 1) {
-      throw new Error(`Cannot answer duplicate-agent-results question: ${response.questionId}`);
+      throw invalidReportResponse(`Cannot answer duplicate-agent-results question: ${response.questionId}`);
     }
     const result = resultById.get(response.questionId);
     if (clean(result?.status) === 'approved') {
-      throw new Error(`cannot override agent-approved question: ${response.questionId}`);
+      throw invalidReportResponse(`cannot override agent-approved question: ${response.questionId}`);
     }
     if (!result) {
-      throw new Error(`Cannot answer non-escalated or unknown question: ${response.questionId}`);
+      throw invalidReportResponse(`Cannot answer non-escalated or unknown question: ${response.questionId}`);
     }
     if (!canUseEffectiveResults) {
       if (clean(result.status) === 'escalated') {
-        throw new Error(`Cannot answer stale escalated question from non-effective review: ${response.questionId}`);
+        throw invalidReportResponse(`Cannot answer stale escalated question from non-effective review: ${response.questionId}`);
       }
-      throw new Error(`Cannot answer non-escalated or unknown question: ${response.questionId}`);
+      throw invalidReportResponse(`Cannot answer non-escalated or unknown question: ${response.questionId}`);
     }
     if (clean(result.status) !== 'escalated') {
-      throw new Error(`Cannot answer non-escalated or unknown question: ${response.questionId}`);
+      throw invalidReportResponse(`Cannot answer non-escalated or unknown question: ${response.questionId}`);
     }
     humanResponseById.set(response.questionId, response);
   }

@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { buildReport } from './build-report.mjs';
+import { buildReport, InvalidReportResponseError } from './build-report.mjs';
 
 const HOST = '127.0.0.1';
 const STATIC = new Map([
@@ -79,24 +79,6 @@ function readJson(request) {
   });
 }
 
-const INVALID_REPORT_ERROR_PATTERNS = [
-  /^Responses must be an array$/,
-  /^Unknown question: /,
-  /^Invalid decision: /,
-  /^Duplicate response: /,
-  /^Correction text is required for /,
-  /^Answer for .* exceeds \d+ characters$/,
-  /^Cannot answer duplicate-agent-results question: /,
-  /^cannot override agent-approved question: /i,
-  /^Cannot answer non-escalated or unknown question: /,
-  /^Cannot answer stale escalated question from non-effective review: /
-];
-
-function isInvalidReportError(error) {
-  const message = String(error?.message || '');
-  return INVALID_REPORT_ERROR_PATTERNS.some(pattern => pattern.test(message));
-}
-
 async function serveStatic(response, publicDir, pathname, method) {
   const asset = STATIC.get(pathname);
   if (!asset) {
@@ -169,7 +151,7 @@ export function createVlpServer({ session, publicDir, agentReviewService = null 
         try {
           markdown = buildReport(session, payload.responses || [], { agentReview });
         } catch (error) {
-          if (isInvalidReportError(error)) {
+          if (error instanceof InvalidReportResponseError || error?.code === 'INVALID_REPORT_RESPONSES') {
             throw new HttpError(400, 'Invalid report responses');
           }
           throw error;

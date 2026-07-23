@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReport } from '../src/build-report.mjs';
+import { buildReport, InvalidReportResponseError } from '../src/build-report.mjs';
 
 const session = {
   id: 'session-demo',
@@ -750,9 +750,63 @@ test('redacts absolute evidence and diagnostic paths in agent mode while preserv
   assert.match(markdown, /search\.js:8 — Access denied/);
 });
 
-test('rejects unknown questions, decisions, duplicate answers, and empty corrections', () => {
-  assert.throws(() => buildReport(session, [{ questionId: 'bad', decision: 'accept', answer: '' }]), /Unknown question/);
-  assert.throws(() => buildReport(session, [{ questionId: 'q-correct', decision: 'maybe', answer: '' }]), /Invalid decision/);
-  assert.throws(() => buildReport(session, [{ questionId: 'q-correct', decision: 'correct', answer: ' ' }]), /Correction text is required/);
-  assert.throws(() => buildReport(session, [responses[0], responses[0]]), /Duplicate response/);
+test('throws InvalidReportResponseError for invalid manual report responses', () => {
+  for (const run of [
+    () => buildReport(session, [{ questionId: 'bad', decision: 'accept', answer: '' }]),
+    () => buildReport(session, [{ questionId: 'q-correct', decision: 'maybe', answer: '' }]),
+    () => buildReport(session, [responses[0], responses[0]]),
+    () => buildReport(session, [{ questionId: 'q-correct', decision: 'correct', answer: ' ' }]),
+    () => buildReport(session, [{
+      questionId: 'q-correct',
+      decision: 'correct',
+      answer: 'x'.repeat(4001)
+    }])
+  ]) {
+    assert.throws(run, error => {
+      assert.ok(error instanceof InvalidReportResponseError);
+      assert.equal(error.code, 'INVALID_REPORT_RESPONSES');
+      return true;
+    });
+  }
+});
+
+test('throws InvalidReportResponseError for invalid agent-mode browser responses', () => {
+  assert.throws(() => buildReport(session, [{
+    questionId: 'q-correct',
+    decision: 'correct',
+    answer: 'Override the approved answer.'
+  }], { agentReview }), error => {
+    assert.ok(error instanceof InvalidReportResponseError);
+    assert.equal(error.code, 'INVALID_REPORT_RESPONSES');
+    return true;
+  });
+
+  const partialReview = {
+    ...agentReview,
+    results: agentReview.results.filter(result => result.questionId !== 'q-open')
+  };
+  assert.throws(() => buildReport(session, [{
+    questionId: 'q-open',
+    decision: 'correct',
+    answer: 'Surface a typed search error.'
+  }], { agentReview: partialReview }), error => {
+    assert.ok(error instanceof InvalidReportResponseError);
+    assert.equal(error.code, 'INVALID_REPORT_RESPONSES');
+    return true;
+  });
+});
+
+test('leaves unexpected report bugs as non-validation errors', () => {
+  const brokenSession = {
+    ...session,
+    id: {
+      toString() {
+        throw new Error('boom');
+      }
+    }
+  };
+
+  const error = assert.throws(() => buildReport(brokenSession, responses));
+  assert.notEqual(error?.name, 'InvalidReportResponseError');
+  assert.notEqual(error?.code, 'INVALID_REPORT_RESPONSES');
 });

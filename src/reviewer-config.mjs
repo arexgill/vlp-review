@@ -1,15 +1,34 @@
 export const DEFAULT_REVIEWER_BASE_URL = 'https://api.openai.com/v1';
-const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1']);
+
+function exactHttpLoopbackLiteral(value) {
+  const match = /^http:\/\/([^/?#]*)/i.exec(value);
+  if (!match) return false;
+
+  const authority = match[1];
+  const hostPort = authority.slice(authority.lastIndexOf('@') + 1);
+  if (!hostPort) return false;
+
+  const hostname = hostPort.startsWith('[')
+    ? hostPort.slice(0, hostPort.indexOf(']') + 1)
+    : hostPort.split(':', 1)[0];
+
+  return hostname.toLowerCase() === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+}
 
 export function normalizeReviewerBaseUrl(value) {
+  const rawValue = String(value);
+  if (rawValue !== rawValue.trim()) {
+    throw new Error('Reviewer base URL must be a valid HTTP or HTTPS URL');
+  }
+
   let url;
   try {
-    url = new URL(String(value));
+    url = new URL(rawValue);
   } catch {
     throw new Error('Reviewer base URL must be a valid HTTP or HTTPS URL');
   }
-  const hostname = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, '$1');
-  const loopbackHttp = url.protocol === 'http:' && LOOPBACK.has(hostname);
+
+  const loopbackHttp = url.protocol === 'http:' && exactHttpLoopbackLiteral(rawValue);
   if (url.protocol !== 'https:' && !loopbackHttp) {
     throw new Error('Reviewer base URL must use HTTPS unless it targets exact loopback');
   }

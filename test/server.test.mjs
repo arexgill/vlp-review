@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createVlpServer, listen } from '../src/server.mjs';
@@ -124,12 +124,12 @@ function createFakeReviewService(initial, completed = initial) {
   };
 }
 
-async function runningServer(t, { agentReviewService = null } = {}) {
+async function runningServer(t, { sessionData = session, agentReviewService = null } = {}) {
   const publicDir = await mkdtemp(path.join(tmpdir(), 'vlp-public-'));
   await writeFile(path.join(publicDir, 'index.html'), '<h1>VLP</h1>');
   await writeFile(path.join(publicDir, 'app.js'), 'console.log("VLP")');
   await writeFile(path.join(publicDir, 'styles.css'), 'body{}');
-  const server = createVlpServer({ session, publicDir, agentReviewService });
+  const server = createVlpServer({ session: sessionData, publicDir, agentReviewService });
   const address = await listen(server, { port: 0 });
   t.after(() => server.close());
   return address;
@@ -225,23 +225,68 @@ test('ignores forged agent review payloads and rejects browser overrides of agen
   assert.deepEqual(await override.json(), { error: 'Invalid report responses' });
 });
 
-test('maps invalid manual report responses to a safe 400 response', async t => {
-  const address = await runningServer(t);
+test('maps explicit report-validation errors to a safe 400 response', async t => {
+  const manualAddress = await runningServer(t);
+  const approvedAgentAddress = await runningServer(t, {
+    agentReviewService: createFakeReviewService(approvedAgentReview)
+  });
+  const readyAgentAddress = await runningServer(t, {
+    agentReviewService: createFakeReviewService(readyAgentReview)
+  });
+
+  for (const [address, payload] of [
+    [manualAddress, { responses: [{ questionId: 'does-not-exist', decision: 'accept', answer: '' }] }],
+    [manualAddress, { responses: [{ questionId: 'q-approved', decision: 'maybe', answer: '' }] }],
+    [manualAddress, { responses: [
+      { questionId: 'q-approved', decision: 'accept', answer: '' },
+      { questionId: 'q-approved', decision: 'accept', answer: '' }
+    ] }],
+    [manualAddress, { responses: [{ questionId: 'q-approved', decision: 'correct', answer: ' ' }] }],
+    [manualAddress, { responses: [{ questionId: 'q-approved', decision: 'correct', answer: 'x'.repeat(4001) }] }],
+    [approvedAgentAddress, { responses: [{ questionId: 'q-approved', decision: 'correct', answer: 'Override the approved answer.' }] }],
+    [readyAgentAddress, { responses: [{ questionId: 'q-escalated', decision: 'correct', answer: 'Surface a typed search error.' }] }]
+  ]) {
+    const report = await fetch(`${address.url}/api/report`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    assert.equal(report.status, 400);
+    assert.deepEqual(await report.json(), { error: 'Invalid report responses' });
+  }
+});
+
+test('classifies report-validation errors without message regex coupling', async () => {
+  const serverSource = await readFile(new URL('../src/server.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(serverSource, /INVALID_REPORT_ERROR_PATTERNS|isInvalidReportError/);
+});
+
+test('leaves unexpected report bugs as generic 500 responses', async t => {
+  const brokenSession = {
+    ...session,
+    id: {
+      toString() {
+        throw new Error('boom');
+      }
+    }
+  };
+  const address = await runningServer(t, { sessionData: brokenSession });
 
   const report = await fetch(`${address.url}/api/report`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       responses: [{
-        questionId: 'does-not-exist',
+        questionId: 'q-approved',
         decision: 'accept',
         answer: ''
       }]
     })
   });
 
-  assert.equal(report.status, 400);
-  assert.deepEqual(await report.json(), { error: 'Invalid report responses' });
+  assert.equal(report.status, 500);
+  assert.deepEqual(await report.json(), { error: 'Internal server error' });
 });
 
 test('rejects report generation while the agent review is running', async t => {
