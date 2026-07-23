@@ -2,6 +2,7 @@ const state = {
   session: null,
   agentReview: null,
   agentPolling: null,
+  agentRunGeneration: 0,
   sourceIndex: 0,
   questionIndex: 0,
   responses: new Map(),
@@ -110,11 +111,7 @@ function humanResponses() {
 }
 
 function pruneResponsesToEscalated() {
-  if (!isAgentMode()) return;
-  if (!hasEffectiveAgentReview()) {
-    state.responses.clear();
-    return;
-  }
+  if (!isAgentMode() || !hasEffectiveAgentReview()) return;
   const allowed = new Set(
     (state.agentReview?.results || [])
       .filter(result => result.status === 'escalated')
@@ -123,6 +120,12 @@ function pruneResponsesToEscalated() {
   for (const questionId of [...state.responses.keys()]) {
     if (!allowed.has(questionId)) state.responses.delete(questionId);
   }
+}
+
+function reconcileAuthoritativeResponses() {
+  if (!isAgentMode() || !hasEffectiveAgentReview()) return;
+  pruneResponsesToEscalated();
+  persistResponses();
 }
 
 function restoreResponses() {
@@ -178,6 +181,25 @@ function reviewerStatusMessage(review) {
   if (!review) return 'Loading reviewer state…';
   const base = REVIEW_STATUS_LABELS[review.status] || 'Reviewer state unavailable.';
   return review?.error?.message ? `${base} ${review.error.message}` : base;
+}
+
+function reviewerStatusTone(review) {
+  if (!review || review.status === 'not-configured') return 'success';
+  if (review.status === 'approved') return 'success';
+  if (review.status === 'failed' || review.status === 'unavailable') return 'error';
+  return 'neutral';
+}
+
+function syncAppStatusWithReviewer(review = state.agentReview) {
+  if (!review || review.status === 'not-configured') {
+    setStatus('Review session ready', 'success');
+    return;
+  }
+  setStatus(reviewerStatusMessage(review), reviewerStatusTone(review));
+}
+
+function reportSubmissionLocked() {
+  return isAgentMode() && !hasEffectiveAgentReview();
 }
 
 function setQuestionControls({ disabled, selectedDecision = null, answer = '', error = '', placeholder = 'Describe the behavior you actually intended…' }) {
@@ -247,15 +269,10 @@ async function loadApp() {
     }
 
     restoreResponses();
-    pruneResponsesToEscalated();
-    persistResponses();
+    reconcileAuthoritativeResponses();
     renderAll();
     syncAgentPolling();
-    if (state.agentReview?.status === 'unavailable') {
-      setStatus(reviewerStatusMessage(state.agentReview), 'error');
-      return;
-    }
-    setStatus('Review session ready', 'success');
+    syncAppStatusWithReviewer();
   } catch (error) {
     clearAgentPolling();
     setStatus(error.message, 'error');
@@ -269,10 +286,10 @@ async function fetchAgentReview() {
     const response = await fetch('/api/agent-review', { headers: { accept: 'application/json' } });
     if (!response.ok) throw new Error(`Reviewer request failed (${response.status})`);
     state.agentReview = await response.json();
-    pruneResponsesToEscalated();
-    persistResponses();
+    reconcileAuthoritativeResponses();
     renderAll();
     syncAgentPolling();
+    syncAppStatusWithReviewer();
   } catch (error) {
     if (state.agentReview?.status === 'running') {
       state.agentReview = {
@@ -283,8 +300,6 @@ async function fetchAgentReview() {
       syncAgentPolling();
     } else if (isAgentMode()) {
       state.agentReview = reviewerUnavailableState(error);
-      pruneResponsesToEscalated();
-      persistResponses();
       renderAll();
     }
     setStatus(error.message, 'error');
@@ -297,6 +312,9 @@ async function runAgentReview() {
     return;
   }
   if (!isAgentMode() || state.agentReview.status === 'running') return;
+  clearAgentPolling();
+  const runGeneration = state.agentRunGeneration + 1;
+  state.agentRunGeneration = runGeneration;
   state.agentReview = {
     ...state.agentReview,
     status: 'running',
@@ -316,21 +334,31 @@ async function runAgentReview() {
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `Reviewer request failed (${response.status})`);
+    if (runGeneration !== state.agentRunGeneration || state.agentReview?.status !== 'running') {
+      syncAppStatusWithReviewer();
+      return;
+    }
     state.agentReview = payload;
-    pruneResponsesToEscalated();
-    persistResponses();
+    reconcileAuthoritativeResponses();
     renderAll();
     syncAgentPolling();
-    const tone = payload.status === 'failed' ? 'error' : 'success';
-    setStatus(reviewerStatusMessage(payload), tone);
+    syncAppStatusWithReviewer(payload);
   } catch (error) {
-    state.agentReview = {
-      ...state.agentReview,
-      error: { code: 'reviewer-request-failed', message: error.message }
-    };
-    renderAll();
-    syncAgentPolling();
-    setStatus(error.message, 'error');
+    if (runGeneration !== state.agentRunGeneration) {
+      syncAppStatusWithReviewer();
+      return;
+    }
+    if (state.agentReview?.status === 'running') {
+      state.agentReview = {
+        ...state.agentReview,
+        error: { code: 'reviewer-request-failed', message: error.message }
+      };
+      renderAll();
+      syncAgentPolling();
+      setStatus(error.message, 'error');
+      return;
+    }
+    syncAppStatusWithReviewer();
   }
 }
 
@@ -506,7 +534,7 @@ function renderQuestion() {
     setQuestionControls({ disabled: true, selectedDecision: null, answer: '' });
     elements['previous-button'].disabled = true;
     elements['next-button'].disabled = true;
-    elements['finish-button'].disabled = reviewStatus === 'running';
+    elements['finish-button'].disabled = reportSubmissionLocked();
     return;
   }
 
@@ -576,7 +604,7 @@ function renderQuestion() {
 
   elements['previous-button'].disabled = state.questionIndex === 0;
   elements['next-button'].disabled = state.questionIndex >= questions.length - 1;
-  elements['finish-button'].disabled = reviewStatus === 'running';
+  elements['finish-button'].disabled = reportSubmissionLocked();
 }
 
 function saveDecision(decision) {
@@ -618,6 +646,11 @@ function moveQuestion(delta) {
 }
 
 async function finishReview() {
+  if (reportSubmissionLocked()) {
+    setStatus('Wait for an authoritative reviewer result before building a repair brief.', 'error');
+    renderQuestion();
+    return;
+  }
   try {
     elements['finish-button'].disabled = true;
     setStatus('Building repair brief…');
@@ -636,7 +669,7 @@ async function finishReview() {
   } catch (error) {
     setStatus(error.message, 'error');
   } finally {
-    elements['finish-button'].disabled = state.agentReview?.status === 'running';
+    elements['finish-button'].disabled = reportSubmissionLocked();
   }
 }
 

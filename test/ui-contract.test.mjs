@@ -133,6 +133,23 @@ function createNeedsHumanReview(overrides = {}) {
   };
 }
 
+function createApprovedReview(overrides = {}) {
+  const review = createNeedsHumanReview();
+  return {
+    ...review,
+    status: 'approved',
+    summary: 'Agent approved every answer.',
+    results: review.results.map(result => ({
+      ...result,
+      status: 'approved',
+      effectiveDecision: result.effectiveDecision || result.proposedDecision,
+      escalationReasons: []
+    })),
+    error: null,
+    ...overrides
+  };
+}
+
 function jsonResponse(body, status = 200) {
   return {
     ok: status >= 200 && status < 300,
@@ -434,7 +451,7 @@ test('keeps responsive styling, research caveats, and text-only rendering', asyn
   assert.doesNotMatch(js, /innerHTML/);
 });
 
-test('treats agent results as effective only for approved and needs-human, and clears stale rerun state', async () => {
+test('treats agent results as effective only for approved and needs-human, and explicit reruns clear persisted human state', async () => {
   const post = createDeferred();
   const harness = await createAppHarness({
     routes: {
@@ -475,9 +492,11 @@ test('treats agent results as effective only for approved and needs-human, and c
 
   assert.equal(harness.app.state.agentReview.status, 'running');
   assert.equal(harness.app.state.responses.size, 0);
+  assert.equal(harness.store.get('vlp-review:session-1'), '[]');
   assert.equal(harness.app.state.report, '');
   assert.equal(harness.get('report-output').textContent, '');
   assert.equal(harness.get('report-panel').hidden, true);
+  assert.equal(harness.get('finish-button').disabled, true);
 
   post.reject(new Error('POST dropped after accept'));
   await rerun;
@@ -486,12 +505,12 @@ test('treats agent results as effective only for approved and needs-human, and c
   assert.equal(harness.activeTimerCount(), 1);
 });
 
-test('keeps running on GET sync failures, schedules one retry timer, and avoids duplicate run actions', async () => {
+test('keeps running on GET sync failures, recovers status on successful sync, schedules one retry timer, and avoids duplicate run actions', async () => {
   const post = createDeferred();
   const harness = await createAppHarness({
     routes: {
       'GET /api/session': [jsonResponse(createSession())],
-      'GET /api/agent-review': [jsonResponse(createReadyReview()), new Error('GET poll dropped')],
+      'GET /api/agent-review': [jsonResponse(createReadyReview()), new Error('GET poll dropped'), jsonResponse(createNeedsHumanReview())],
       'POST /api/agent-review': [post.promise]
     }
   });
@@ -505,9 +524,18 @@ test('keeps running on GET sync failures, schedules one retry timer, and avoids 
 
   assert.equal(harness.app.state.agentReview.status, 'running');
   assert.match(harness.get('app-status').textContent, /GET poll dropped/);
+  assert.equal(harness.get('app-status').dataset.tone, 'error');
   assert.equal(harness.activeTimerCount(), 1);
   harness.app.syncAgentPolling();
   assert.equal(harness.activeTimerCount(), 1);
+
+  await harness.app.fetchAgentReview();
+
+  assert.equal(harness.app.state.agentReview.status, 'needs-human');
+  assert.match(harness.get('app-status').textContent, /needs human follow-up/);
+  assert.doesNotMatch(harness.get('app-status').textContent, /GET poll dropped/);
+  assert.equal(harness.get('app-status').dataset.tone, 'neutral');
+  assert.equal(harness.activeTimerCount(), 0);
 
   harness.app.clearAgentPolling();
   harness.app.state.agentReview = createReadyReview();
@@ -519,15 +547,17 @@ test('keeps running on GET sync failures, schedules one retry timer, and avoids 
   post.reject(new Error('POST still pending'));
 });
 
-test('loads the session even when the reviewer request fails and shows a reviewer-specific unavailable state', async () => {
+test('preserves saved responses across unavailable sync until an authoritative effective state arrives', async () => {
   const harness = await createAppHarness({
     routes: {
       'GET /api/session': [jsonResponse(createSession())],
-      'GET /api/agent-review': [new Error('Reviewer request failed (503)')]
+      'GET /api/agent-review': [new Error('Reviewer request failed (503)'), jsonResponse(createNeedsHumanReview())],
+      'POST /api/report': [jsonResponse({ markdown: '# should not run' })]
     },
     storage: {
       'vlp-review:session-1': JSON.stringify([
-        { questionId: 'q-1', decision: 'accept', answer: '' }
+        { questionId: 'q-1', decision: 'correct', answer: 'Search the description too.' },
+        { questionId: 'q-2', decision: 'accept', answer: '' }
       ])
     }
   });
@@ -540,5 +570,91 @@ test('loads the session even when the reviewer request fails and shows a reviewe
   assert.equal(harness.get('reviewer-status').dataset.state, 'unavailable');
   assert.equal(harness.get('reviewer-run-button').disabled, false);
   assert.equal(harness.get('accept-button').disabled, true);
+  assert.equal(harness.get('finish-button').disabled, true);
+  assert.equal(harness.app.state.responses.size, 2);
   assert.equal(harness.app.humanResponses().length, 0);
+  assert.equal(
+    harness.store.get('vlp-review:session-1'),
+    JSON.stringify([
+      { questionId: 'q-1', decision: 'correct', answer: 'Search the description too.' },
+      { questionId: 'q-2', decision: 'accept', answer: '' }
+    ])
+  );
+
+  harness.get('finish-button').click();
+  await harness.flush();
+  assert.equal(harness.countCalls('POST /api/report'), 0);
+
+  await harness.app.fetchAgentReview();
+
+  assert.equal(harness.app.state.agentReview.status, 'needs-human');
+  assert.equal(harness.app.state.responses.size, 1);
+  assert.equal(
+    JSON.stringify([...harness.app.state.responses.values()]),
+    JSON.stringify([{ questionId: 'q-1', decision: 'correct', answer: 'Search the description too.' }])
+  );
+  assert.equal(
+    harness.store.get('vlp-review:session-1'),
+    JSON.stringify([{ questionId: 'q-1', decision: 'correct', answer: 'Search the description too.' }])
+  );
+  assert.equal(harness.get('finish-button').disabled, false);
+});
+
+test('does not attach a late POST transport error after GET sync reaches a terminal state', async () => {
+  const post = createDeferred();
+  const harness = await createAppHarness({
+    routes: {
+      'GET /api/session': [jsonResponse(createSession())],
+      'GET /api/agent-review': [jsonResponse(createReadyReview()), jsonResponse(createApprovedReview())],
+      'POST /api/agent-review': [post.promise]
+    }
+  });
+
+  const run = harness.app.runAgentReview();
+  await harness.flush();
+  await harness.app.fetchAgentReview();
+
+  assert.equal(harness.app.state.agentReview.status, 'approved');
+  assert.match(harness.get('app-status').textContent, /approved every targeted question/);
+  assert.equal(harness.get('app-status').dataset.tone, 'success');
+
+  post.reject(new Error('POST transport failed late'));
+  await run;
+
+  assert.equal(harness.app.state.agentReview.status, 'approved');
+  assert.equal(harness.app.state.agentReview.error, null);
+  assert.doesNotMatch(harness.get('app-status').textContent, /POST transport failed late/);
+  assert.equal(harness.get('app-status').dataset.tone, 'success');
+});
+
+test('ignores stale POST responses from older runs after a newer explicit rerun', async () => {
+  const firstPost = createDeferred();
+  const secondPost = createDeferred();
+  const harness = await createAppHarness({
+    routes: {
+      'GET /api/session': [jsonResponse(createSession())],
+      'GET /api/agent-review': [jsonResponse(createReadyReview()), jsonResponse(createApprovedReview())],
+      'POST /api/agent-review': [firstPost.promise, secondPost.promise]
+    }
+  });
+
+  const firstRun = harness.app.runAgentReview();
+  await harness.flush();
+  await harness.app.fetchAgentReview();
+
+  assert.equal(harness.app.state.agentReview.status, 'approved');
+
+  const secondRun = harness.app.runAgentReview();
+  await harness.flush();
+  secondPost.resolve(jsonResponse(createNeedsHumanReview({ summary: 'Fresh rerun result.' })));
+  await secondRun;
+
+  assert.equal(harness.app.state.agentReview.status, 'needs-human');
+  assert.equal(harness.app.state.agentReview.summary, 'Fresh rerun result.');
+
+  firstPost.resolve(jsonResponse(createApprovedReview({ summary: 'Stale older result.' })));
+  await firstRun;
+
+  assert.equal(harness.app.state.agentReview.status, 'needs-human');
+  assert.equal(harness.app.state.agentReview.summary, 'Fresh rerun result.');
 });
