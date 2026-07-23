@@ -260,6 +260,23 @@ test('keeps unanswered escalations in needs-human status', () => {
   assert.match(markdown, /q-open/);
 });
 
+test('keeps needs-human status when no escalated results exist', () => {
+  const noEscalationReview = structuredClone(agentReview);
+  noEscalationReview.status = 'needs-human';
+  noEscalationReview.results = noEscalationReview.results.map(result => (
+    result.questionId === 'q-open'
+      ? { ...result, status: 'approved', effectiveDecision: 'correct', answer: 'Surface an error.' }
+      : result
+  ));
+
+  const markdown = buildReport(session, [], { agentReview: noEscalationReview });
+
+  assert.match(markdown, /Agent review status: Needs human review/);
+  assert.match(markdown, /Final validation status: Needs human review/);
+  assert.doesNotMatch(markdown, /Completed with human resolution/);
+  assert.doesNotMatch(markdown, /All targeted questions were reviewed\./);
+});
+
 test('reports agent-approved validation when all results are automatic', () => {
   const approvedReview = structuredClone(agentReview);
   approvedReview.status = 'approved';

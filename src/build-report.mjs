@@ -131,7 +131,10 @@ function finalValidationStatus(agentReview, unresolvedCount, escalatedCount) {
     case 'failed':
       return 'Reviewer failed';
     case 'needs-human':
-      return unresolvedCount > 0 ? 'Needs human review' : 'Completed with human resolution';
+      if (unresolvedCount > 0) {
+        return 'Needs human review';
+      }
+      return escalatedCount > 0 ? 'Completed with human resolution' : 'Needs human review';
     default:
       return 'Needs human review';
   }
