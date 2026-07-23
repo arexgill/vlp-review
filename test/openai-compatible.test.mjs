@@ -288,4 +288,3 @@ test('rejects provider envelopes without assistant content', async t => {
     }
   );
 });
-
