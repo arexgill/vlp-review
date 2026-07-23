@@ -90,15 +90,22 @@ test('deduplicates concurrent runs and records an approved result', async () => 
   assert.equal(state.results[0].status, 'approved');
 });
 
-test('rejects runs when no reviewer is configured', async () => {
+test('rejects runs when no reviewer is configured and reuses the same in-flight promise until rejection', async () => {
   const service = createAgentReviewService({ session });
 
   assert.equal(service.getState().status, 'not-configured');
-  await assert.rejects(service.run(), error => error?.code === 'reviewer-not-configured');
+  const first = service.run();
+  const second = service.run();
+  assert.strictEqual(first, second);
+  await assert.rejects(first, error => error?.code === 'reviewer-not-configured');
   assert.equal(service.getState().status, 'not-configured');
+
+  const third = service.run();
+  assert.notStrictEqual(third, first);
+  await assert.rejects(third, error => error?.code === 'reviewer-not-configured');
 });
 
-test('exposes configuration errors without rejecting run', async () => {
+test('exposes configuration errors without rejecting run and reuses the same in-flight promise until resolution', async () => {
   const service = createAgentReviewService({
     session,
     reviewerInfo,
@@ -110,11 +117,20 @@ test('exposes configuration errors without rejecting run', async () => {
   assert.equal(initial.error.code, 'reviewer-configuration');
   assert.match(initial.error.message, /VLP_REVIEWER_API_KEY/);
 
-  const result = await service.run();
+  const first = service.run();
+  const second = service.run();
+  assert.strictEqual(first, second);
+
+  const result = await first;
   assert.equal(result.status, 'failed');
   assert.notStrictEqual(result, service.getState());
   result.error.message = 'changed';
   assert.match(service.getState().error.message, /VLP_REVIEWER_API_KEY/);
+
+  const third = service.run();
+  assert.notStrictEqual(third, first);
+  const rerun = await third;
+  assert.equal(rerun.status, 'failed');
 });
 
 test('marks the review as needs-human when any result escalates', async () => {
@@ -134,7 +150,7 @@ test('marks the review as needs-human when any result escalates', async () => {
   assert.deepEqual(state.results[0].escalationReasons, ['confidence-below-threshold']);
 });
 
-test('approves empty sessions without invoking the reviewer', async () => {
+test('approves empty sessions without invoking the reviewer and reuses the same in-flight promise until resolution', async () => {
   let reviewerCalls = 0;
   const service = createAgentReviewService({
     session: { ...session, questions: [] },
@@ -147,10 +163,20 @@ test('approves empty sessions without invoking the reviewer', async () => {
     }
   });
 
-  const state = await service.run();
+  const first = service.run();
+  const second = service.run();
+  assert.strictEqual(first, second);
+
+  const state = await first;
   assert.equal(state.status, 'approved');
   assert.equal(state.summary, 'No targeted mismatches were available for agent review.');
   assert.deepEqual(state.results, []);
+  assert.equal(reviewerCalls, 0);
+
+  const third = service.run();
+  assert.notStrictEqual(third, first);
+  const rerun = await third;
+  assert.equal(rerun.status, 'approved');
   assert.equal(reviewerCalls, 0);
 });
 

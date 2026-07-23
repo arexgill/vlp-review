@@ -1,5 +1,7 @@
 export const REVIEW_THRESHOLD = 0.8;
 
+const VALID_DECISIONS = new Set(['accept', 'correct', 'irrelevant', 'escalate']);
+
 export function applyReviewPolicy(session, providerReview, { threshold = REVIEW_THRESHOLD } = {}) {
   const decisions = new Map((providerReview?.decisions || []).map(item => [item.questionId, item]));
   const issuesByQuestion = new Map();
@@ -16,6 +18,7 @@ export function applyReviewPolicy(session, providerReview, { threshold = REVIEW_
     const reasons = [...new Set(issuesByQuestion.get(question.id) || [])];
 
     if (!proposal) reasons.push('missing-provider-decision');
+    if (proposal && !VALID_DECISIONS.has(proposal.decision)) reasons.push('invalid-provider-decision');
     if (proposal?.decision === 'escalate') reasons.push('provider-requested-escalation');
     if (proposal && proposal.confidence < threshold) reasons.push('confidence-below-threshold');
     if (proposal && ['accept', 'correct'].includes(proposal.decision) && proposal.intentBasis !== 'explicit-prompt') {

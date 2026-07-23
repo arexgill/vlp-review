@@ -60,6 +60,15 @@ test('escalates omitted decisions and matching validation issues with stable rea
   assert.equal(results[1].effectiveDecision, null);
 });
 
+test('escalates invalid decision strings even when validation is bypassed', () => {
+  const result = resultFor({ decision: 'maybe' });
+
+  assert.equal(result.status, 'escalated');
+  assert.equal(result.proposedDecision, 'maybe');
+  assert.equal(result.effectiveDecision, null);
+  assert.deepEqual(result.escalationReasons, ['invalid-provider-decision']);
+});
+
 test('preserves approved rationale and evidence and only sets effectiveDecision for approvals', () => {
   const approved = resultFor({
     decision: 'correct',

@@ -50,19 +50,31 @@ export function createAgentReviewService({
     return cloneState(state);
   }
 
+  function setInFlight(promise) {
+    const wrapped = promise.finally(() => {
+      if (inFlight === wrapped) {
+        inFlight = null;
+      }
+    });
+    inFlight = wrapped;
+    return wrapped;
+  }
+
   function run() {
     if (inFlight) {
       return inFlight;
     }
 
     if (configurationError) {
-      return Promise.resolve(getState());
+      return setInFlight(Promise.resolve().then(() => getState()));
     }
 
     if (!reviewer) {
       const error = new Error('Reviewer is not configured.');
       error.code = 'reviewer-not-configured';
-      return Promise.reject(error);
+      return setInFlight(Promise.resolve().then(() => {
+        throw error;
+      }));
     }
 
     state = {
@@ -82,7 +94,7 @@ export function createAgentReviewService({
         results: [],
         error: null
       };
-      return Promise.resolve(getState());
+      return setInFlight(Promise.resolve().then(() => getState()));
     }
 
     const controller = new AbortController();
@@ -95,39 +107,38 @@ export function createAgentReviewService({
       reviewPromise = Promise.reject(error);
     }
 
-    inFlight = Promise.resolve(reviewPromise)
-      .then(providerReview => {
-        const results = applyReviewPolicy(session, providerReview);
-        state = {
-          ...state,
-          status: results.every(result => result.status === 'approved') ? 'approved' : 'needs-human',
-          completedAt: clock(),
-          summary: providerReview?.summary || '',
-          results,
-          error: null
-        };
-        return getState();
-      })
-      .catch(error => {
-        state = {
-          ...state,
-          status: 'failed',
-          completedAt: clock(),
-          summary: '',
-          results: [],
-          error: {
-            code: error?.code || (controller.signal.aborted ? 'review-timeout' : 'reviewer-request-failed'),
-            message: FAILED_REVIEW_MESSAGE
-          }
-        };
-        return getState();
-      })
-      .finally(() => {
-        clearTimeout(timeout);
-        inFlight = null;
-      });
-
-    return inFlight;
+    return setInFlight(
+      Promise.resolve(reviewPromise)
+        .then(providerReview => {
+          const results = applyReviewPolicy(session, providerReview);
+          state = {
+            ...state,
+            status: results.every(result => result.status === 'approved') ? 'approved' : 'needs-human',
+            completedAt: clock(),
+            summary: providerReview?.summary || '',
+            results,
+            error: null
+          };
+          return getState();
+        })
+        .catch(error => {
+          state = {
+            ...state,
+            status: 'failed',
+            completedAt: clock(),
+            summary: '',
+            results: [],
+            error: {
+              code: error?.code || (controller.signal.aborted ? 'review-timeout' : 'reviewer-request-failed'),
+              message: FAILED_REVIEW_MESSAGE
+            }
+          };
+          return getState();
+        })
+        .finally(() => {
+          clearTimeout(timeout);
+        })
+    );
   }
 
   return {
