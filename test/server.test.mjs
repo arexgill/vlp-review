@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createVlpServer, listen } from '../src/server.mjs';
@@ -242,7 +242,6 @@ test('maps explicit report-validation errors to a safe 400 response', async t =>
       { questionId: 'q-approved', decision: 'accept', answer: '' }
     ] }],
     [manualAddress, { responses: [{ questionId: 'q-approved', decision: 'correct', answer: ' ' }] }],
-    [manualAddress, { responses: [{ questionId: 'q-approved', decision: 'correct', answer: 'x'.repeat(4001) }] }],
     [approvedAgentAddress, { responses: [{ questionId: 'q-approved', decision: 'correct', answer: 'Override the approved answer.' }] }],
     [readyAgentAddress, { responses: [{ questionId: 'q-escalated', decision: 'correct', answer: 'Surface a typed search error.' }] }]
   ]) {
@@ -257,18 +256,27 @@ test('maps explicit report-validation errors to a safe 400 response', async t =>
   }
 });
 
-test('classifies report-validation errors without message regex coupling', async () => {
-  const serverSource = await readFile(new URL('../src/server.mjs', import.meta.url), 'utf8');
-  assert.doesNotMatch(serverSource, /INVALID_REPORT_ERROR_PATTERNS|isInvalidReportError/);
+test('returns safe 400 responses for manual report answers over 4000 characters', async t => {
+  const address = await runningServer(t);
+
+  const report = await fetch(`${address.url}/api/report`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      responses: [{ questionId: 'q-approved', decision: 'correct', answer: 'x'.repeat(4001) }]
+    })
+  });
+
+  assert.equal(report.status, 400);
+  assert.deepEqual(await report.json(), { error: 'Invalid report responses' });
 });
 
-test('leaves unexpected report bugs as generic 500 responses', async t => {
+
+test('returns generic 500 responses when unexpected failures resemble validation messages', async t => {
   const brokenSession = {
     ...session,
-    id: {
-      toString() {
-        throw new Error('boom');
-      }
+    get questions() {
+      throw new Error('Unknown question: internal failure');
     }
   };
   const address = await runningServer(t, { sessionData: brokenSession });
