@@ -409,7 +409,16 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
     if (clean(result?.status) === 'approved') {
       throw new Error(`cannot override agent-approved question: ${response.questionId}`);
     }
-    if (!result || clean(result.status) !== 'escalated') {
+    if (!result) {
+      throw new Error(`Cannot answer non-escalated or unknown question: ${response.questionId}`);
+    }
+    if (!canUseEffectiveResults) {
+      if (clean(result.status) === 'escalated') {
+        throw new Error(`Cannot answer stale escalated question from non-effective review: ${response.questionId}`);
+      }
+      throw new Error(`Cannot answer non-escalated or unknown question: ${response.questionId}`);
+    }
+    if (clean(result.status) !== 'escalated') {
       throw new Error(`Cannot answer non-escalated or unknown question: ${response.questionId}`);
     }
     humanResponseById.set(response.questionId, response);
@@ -437,6 +446,9 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
 
     if (!canUseEffectiveResults) {
       auditItems.push(renderNonEffectiveAuditItem(session, question, result));
+      if (clean(result.status) === 'escalated') {
+        unresolved.push(renderUnresolvedEscalation(session, question, result));
+      }
       continue;
     }
 

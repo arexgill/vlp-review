@@ -420,6 +420,31 @@ test('does not treat failed review results as effective decisions', () => {
   assert.doesNotMatch(markdown, /## Repair Instructions for Coding Agent/);
 });
 
+test('renders stale escalations from failed reviews as unresolved', () => {
+  const failedReview = structuredClone(agentReview);
+  failedReview.status = 'failed';
+
+  const markdown = buildReport(session, [], { agentReview: failedReview });
+
+  assert.match(markdown, /Final validation status: Reviewer failed/);
+  assert.match(markdown, /## Unresolved Questions/);
+  assert.match(markdown, /q-open/);
+  assert.match(markdown, /\*\*Agent proposal:\*\* correct/);
+  assert.match(markdown, /\*\*Escalation reasons:\*\* confidence-below-threshold, intent-not-explicit/);
+  assert.doesNotMatch(markdown, /Human resolution:/);
+});
+
+test('rejects human responses against stale escalations in failed reviews', () => {
+  const failedReview = structuredClone(agentReview);
+  failedReview.status = 'failed';
+
+  assert.throws(() => buildReport(session, [{
+    questionId: 'q-open',
+    decision: 'correct',
+    answer: 'Surface a typed search error.'
+  }], { agentReview: failedReview }), /non-effective|stale/i);
+});
+
 test('reports zero-question agent-approved sessions with no targeted mismatches', () => {
   const markdown = buildReport({
     id: 'zero',
