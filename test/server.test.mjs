@@ -221,8 +221,27 @@ test('ignores forged agent review payloads and rejects browser overrides of agen
       }]
     })
   });
-  assert.equal(override.status, 500);
-  assert.deepEqual(await override.json(), { error: 'Internal server error' });
+  assert.equal(override.status, 400);
+  assert.deepEqual(await override.json(), { error: 'Invalid report responses' });
+});
+
+test('maps invalid manual report responses to a safe 400 response', async t => {
+  const address = await runningServer(t);
+
+  const report = await fetch(`${address.url}/api/report`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      responses: [{
+        questionId: 'does-not-exist',
+        decision: 'accept',
+        answer: ''
+      }]
+    })
+  });
+
+  assert.equal(report.status, 400);
+  assert.deepEqual(await report.json(), { error: 'Invalid report responses' });
 });
 
 test('rejects report generation while the agent review is running', async t => {
