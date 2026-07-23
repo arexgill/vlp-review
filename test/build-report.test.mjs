@@ -278,6 +278,25 @@ test('reports agent-approved validation when all results are automatic', () => {
   assert.doesNotMatch(markdown, /Completed with human resolution/);
 });
 
+test('keeps missing agent results in audit, unresolved, and conservative final status', () => {
+  const incompleteReview = structuredClone(agentReview);
+  incompleteReview.status = 'approved';
+  incompleteReview.results = incompleteReview.results.filter(result => result.questionId !== 'q-open');
+
+  const markdown = buildReport(session, [], { agentReview: incompleteReview });
+
+  assert.match(markdown, /Agent review status: Agent approved/);
+  assert.match(markdown, /Final validation status: Needs human review/);
+  assert.match(markdown, /## Agent Review Audit/);
+  assert.match(markdown, /q-open/);
+  assert.match(markdown, /No agent review result was recorded for this question\./);
+  assert.match(markdown, /## Unresolved Questions/);
+  assert.doesNotMatch(markdown, /Final validation status: Agent approved/);
+  assert.doesNotMatch(markdown, /All targeted questions were reviewed\./);
+  assert.doesNotMatch(markdown, /Update the generated code to satisfy:/);
+  assert.doesNotMatch(markdown, /Preserve the behavior accepted in:/);
+});
+
 test('reports reviewer failures without claiming approval', () => {
   const markdown = buildReport(session, [], {
     agentReview: {

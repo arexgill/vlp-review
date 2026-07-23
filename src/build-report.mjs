@@ -123,10 +123,10 @@ function agentReviewStatusLabel(status) {
 function finalValidationStatus(agentReview, unresolvedCount, escalatedCount) {
   switch (clean(agentReview?.status)) {
     case 'approved':
-      if (escalatedCount > 0) {
-        return unresolvedCount > 0 ? 'Needs human review' : 'Completed with human resolution';
+      if (unresolvedCount > 0) {
+        return 'Needs human review';
       }
-      return 'Agent approved';
+      return escalatedCount > 0 ? 'Completed with human resolution' : 'Agent approved';
     case 'failed':
       return 'Reviewer failed';
     case 'needs-human':
@@ -145,6 +145,23 @@ function shouldClaimAllReviewed(agentReview, finalStatus, escalatedCount) {
     default:
       return false;
   }
+}
+
+function renderMissingResultAuditItem(session, question) {
+  const evidence = agentEvidenceFor(session, question);
+  return [
+    `### ${cleanInline(question.title)} (${cleanInline(question.id)})`,
+    '',
+    '- Policy status: missing-result',
+    `- Question: ${cleanInline(question.ask)}`,
+    '- Proposed decision: None',
+    '- Effective decision: Pending human review',
+    '- Confidence: Not available',
+    '- Intent basis: Not available',
+    '- Rationale: No agent review result was recorded for this question.',
+    '- Escalation reasons: Missing agent review result',
+    `- Evidence: ${evidence.length ? evidence.join('; ') : 'No direct source line was linked.'}`
+  ].join('\n');
 }
 
 function renderAuditItem(session, question, result, humanResolution) {
@@ -173,6 +190,15 @@ function renderAuditItem(session, question, result, humanResolution) {
   return lines.join('\n');
 }
 
+function renderMissingResultUnresolvedQuestion(question) {
+  return [
+    `### ${cleanInline(question.title)} (${cleanInline(question.id)})`,
+    '',
+    `- **Question:** ${cleanInline(question.ask)}`,
+    '- **Reason:** No agent review result was recorded for this question.'
+  ].join('\n');
+}
+
 function renderUnresolvedEscalation(session, question, result) {
   const evidence = agentEvidenceForDocUnitIds(session, result?.evidenceDocUnitIds || []);
   return [
@@ -186,7 +212,15 @@ function renderUnresolvedEscalation(session, question, result) {
   ].join('\n');
 }
 
-function buildAgentRepairInstructions(session, questions, effectiveResponses, agentReview, finalStatus, escalatedCount) {
+function buildAgentRepairInstructions(session, questions, effectiveResponses, agentReview, finalStatus, escalatedCount, missingResultCount) {
+  if (missingResultCount > 0) {
+    return [
+      'Agent review is incomplete; no repair or preservation instructions can be generated until every question has a review result.',
+      'Do not infer answers for unanswered or unreviewed questions; ask the user before changing those behaviors.',
+      'After editing, run the project tests and report any behavior that could not be implemented.'
+    ].join('\n');
+  }
+
   const repairItems = effectiveResponses
     .filter(response => response.decision === 'correct')
     .map((response, index) => {
@@ -329,17 +363,25 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
   const unresolved = [];
   const auditItems = [];
   const effectiveResponses = [];
+  let missingResultCount = 0;
   const canUseEffectiveResults = EFFECTIVE_AGENT_STATUSES.has(clean(agentReview?.status));
 
   for (const question of questions) {
     const result = resultById.get(question.id);
     const humanResolution = humanResponseById.get(question.id) || null;
 
-    if (result) {
-      auditItems.push(renderAuditItem(session, question, result, humanResolution));
+    if (!result) {
+      if (canUseEffectiveResults) {
+        auditItems.push(renderMissingResultAuditItem(session, question));
+        unresolved.push(renderMissingResultUnresolvedQuestion(question));
+        missingResultCount += 1;
+      }
+      continue;
     }
 
-    if (!canUseEffectiveResults || !result) continue;
+    auditItems.push(renderAuditItem(session, question, result, humanResolution));
+
+    if (!canUseEffectiveResults) continue;
 
     if (clean(result.status) === 'approved' && DECISIONS.has(clean(result.effectiveDecision))) {
       const response = {
@@ -371,7 +413,7 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
   const automaticCount = results.filter(result => clean(result?.status) === 'approved').length;
   const escalatedCount = results.filter(result => clean(result?.status) === 'escalated').length;
   const finalStatus = finalValidationStatus(agentReview, unresolved.length, escalatedCount);
-  const repairInstructions = buildAgentRepairInstructions(session, questions, effectiveResponses, agentReview, finalStatus, escalatedCount);
+  const repairInstructions = buildAgentRepairInstructions(session, questions, effectiveResponses, agentReview, finalStatus, escalatedCount, missingResultCount);
   const zeroQuestionNote = clean(agentReview?.status) === 'approved' && questions.length === 0
     ? '- Review note: Agent approved: no targeted mismatches. Heuristics can miss semantic defects; this result is not a proof of correctness.'
     : null;
