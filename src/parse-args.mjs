@@ -1,3 +1,8 @@
+import {
+  DEFAULT_REVIEWER_BASE_URL,
+  normalizeReviewerBaseUrl
+} from './reviewer-config.mjs';
+
 const DEFAULT_PORT = 4317;
 
 export function usage() {
@@ -8,8 +13,15 @@ Options:
   --prompt <file>            Original prompt as UTF-8 text or Markdown
   --code <path>              Generated JS/TS file or directory
   --port <number>            Local port (default: ${DEFAULT_PORT})
+  --reviewer <provider>      Enable reviewer configuration
+  --reviewer-model <model>   Reviewer model name
+  --reviewer-base-url <url>  Reviewer API base URL (default: ${DEFAULT_REVIEWER_BASE_URL})
+  --auto-review              Enable automatic reviewer flow
   --no-open                  Print URL without opening a browser
-  -h, --help                 Show this help`;
+  -h, --help                 Show this help
+
+Environment:
+  VLP_REVIEWER_API_KEY       Reviewer API key used when --reviewer is set`;
 }
 
 export function parseArgs(argv) {
@@ -18,7 +30,11 @@ export function parseArgs(argv) {
     codePath: null,
     port: DEFAULT_PORT,
     open: true,
-    help: false
+    help: false,
+    reviewer: null,
+    reviewerModel: null,
+    reviewerBaseUrl: DEFAULT_REVIEWER_BASE_URL,
+    autoReview: false
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -31,7 +47,11 @@ export function parseArgs(argv) {
       result.open = false;
       continue;
     }
-    if (!['--prompt', '--code', '--port'].includes(option)) {
+    if (option === '--auto-review') {
+      result.autoReview = true;
+      continue;
+    }
+    if (!['--prompt', '--code', '--port', '--reviewer', '--reviewer-model', '--reviewer-base-url'].includes(option)) {
       throw new Error(`Unknown option: ${option}`);
     }
 
@@ -50,10 +70,30 @@ export function parseArgs(argv) {
       }
       result.port = port;
     }
+    if (option === '--reviewer') result.reviewer = value;
+    if (option === '--reviewer-model') result.reviewerModel = value;
+    if (option === '--reviewer-base-url') result.reviewerBaseUrl = normalizeReviewerBaseUrl(value);
   }
 
-  if (!result.help && (!result.promptPath || !result.codePath)) {
-    throw new Error('Both --prompt and --code are required');
+  if (!result.help) {
+    if (!result.promptPath || !result.codePath) {
+      throw new Error('Both --prompt and --code are required');
+    }
+    if (result.reviewer && result.reviewer !== 'openai-compatible') {
+      throw new Error(`Unsupported reviewer: ${result.reviewer}`);
+    }
+    if (result.reviewer && !result.reviewerModel) {
+      throw new Error('--reviewer-model is required when --reviewer is configured');
+    }
+    if (!result.reviewer && result.reviewerModel) {
+      throw new Error('--reviewer-model requires --reviewer');
+    }
+    if (!result.reviewer && result.reviewerBaseUrl !== DEFAULT_REVIEWER_BASE_URL) {
+      throw new Error('--reviewer-base-url requires --reviewer');
+    }
+    if (result.autoReview && !result.reviewer) {
+      throw new Error('--auto-review requires --reviewer');
+    }
   }
 
   return result;
