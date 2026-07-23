@@ -11,6 +11,17 @@ const STATIC = new Map([
   ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]
 ]);
 const BODY_LIMIT = 256 * 1024;
+const NOT_CONFIGURED_REVIEW = Object.freeze({
+  status: 'not-configured',
+  provider: null,
+  model: null,
+  threshold: 0.8,
+  startedAt: null,
+  completedAt: null,
+  summary: '',
+  results: [],
+  error: null
+});
 const SECURITY_HEADERS = {
   'cache-control': 'no-store',
   'x-content-type-options': 'nosniff',
@@ -92,7 +103,7 @@ async function serveStatic(response, publicDir, pathname, method) {
   }
 }
 
-export function createVlpServer({ session, publicDir }) {
+export function createVlpServer({ session, publicDir, agentReviewService = null }) {
   return http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url || '/', `http://${HOST}`);
@@ -105,6 +116,23 @@ export function createVlpServer({ session, publicDir }) {
         return;
       }
 
+      if (url.pathname === '/api/agent-review') {
+        if (request.method === 'GET') {
+          sendJson(response, 200, agentReviewService?.getState() || NOT_CONFIGURED_REVIEW);
+          return;
+        }
+        if (request.method === 'POST') {
+          if (!agentReviewService) {
+            sendJson(response, 409, { error: 'Reviewer is not configured' });
+            return;
+          }
+          sendJson(response, 200, await agentReviewService.run());
+          return;
+        }
+        sendJson(response, 405, { error: 'Method not allowed' }, { allow: 'GET, POST' });
+        return;
+      }
+
       if (url.pathname === '/api/report') {
         if (request.method !== 'POST') {
           sendJson(response, 405, { error: 'Method not allowed' }, { allow: 'POST' });
@@ -114,7 +142,12 @@ export function createVlpServer({ session, publicDir }) {
           throw new HttpError(415, 'Content-Type must be application/json');
         }
         const payload = await readJson(request);
-        const markdown = buildReport(session, payload.responses || []);
+        const agentReview = agentReviewService?.getState() || NOT_CONFIGURED_REVIEW;
+        if (agentReview.status === 'running') {
+          sendJson(response, 409, { error: 'Agent review is still running' });
+          return;
+        }
+        const markdown = buildReport(session, payload.responses || [], { agentReview });
         sendJson(response, 200, { markdown });
         return;
       }

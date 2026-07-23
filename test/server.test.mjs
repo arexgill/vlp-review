@@ -7,20 +7,129 @@ import { createVlpServer, listen } from '../src/server.mjs';
 
 const session = {
   id: 'session-http',
-  prompt: 'Prompt',
+  prompt: 'Search all product fields.',
   sources: [],
-  docUnits: [],
   diagnostics: [],
-  questions: [],
+  questions: [
+    {
+      id: 'q-approved',
+      type: 'wrong-value',
+      severity: 'medium',
+      title: 'Result limit',
+      ask: 'Is 25 intended?',
+      reason: 'The value is unstated.',
+      promptEvidence: '',
+      docUnitIds: ['doc-1']
+    },
+    {
+      id: 'q-escalated',
+      type: 'api-use',
+      severity: 'medium',
+      title: 'Errors',
+      ask: 'How should errors surface?',
+      reason: 'No error path.',
+      promptEvidence: '',
+      docUnitIds: ['doc-2']
+    }
+  ],
+  docUnits: [
+    { id: 'doc-1', file: 'search.js', lineStart: 6, text: 'It limits to 25.', code: 'slice(0, 25)' },
+    { id: 'doc-2', file: 'search.js', lineStart: 9, text: 'It throws a generic error.', code: 'throw new Error()' }
+  ],
   meta: {}
 };
 
-async function runningServer(t) {
+const notConfiguredReview = {
+  status: 'not-configured',
+  provider: null,
+  model: null,
+  threshold: 0.8,
+  startedAt: null,
+  completedAt: null,
+  summary: '',
+  results: [],
+  error: null
+};
+
+const readyAgentReview = {
+  status: 'ready',
+  provider: 'server-provider',
+  model: 'server-model',
+  threshold: 0.8,
+  startedAt: null,
+  completedAt: null,
+  summary: '',
+  results: [],
+  error: null
+};
+
+const runningAgentReview = {
+  ...readyAgentReview,
+  status: 'running',
+  startedAt: '2026-07-22T10:00:00.000Z'
+};
+
+const approvedAgentReview = {
+  status: 'approved',
+  provider: 'server-provider',
+  model: 'server-model',
+  threshold: 0.8,
+  startedAt: '2026-07-22T10:00:00.000Z',
+  completedAt: '2026-07-22T10:00:01.000Z',
+  summary: 'Agent approved the review.',
+  results: [
+    {
+      questionId: 'q-approved',
+      status: 'approved',
+      proposedDecision: 'accept',
+      effectiveDecision: 'accept',
+      answer: '25 results is correct.',
+      rationale: 'Matches the intended limit.',
+      confidence: 0.93,
+      intentBasis: 'explicit-prompt',
+      evidenceDocUnitIds: ['doc-1'],
+      escalationReasons: []
+    },
+    {
+      questionId: 'q-escalated',
+      status: 'approved',
+      proposedDecision: 'correct',
+      effectiveDecision: 'correct',
+      answer: 'Surface a typed search error.',
+      rationale: 'The prompt requires an actionable error.',
+      confidence: 0.91,
+      intentBasis: 'explicit-prompt',
+      evidenceDocUnitIds: ['doc-2'],
+      escalationReasons: []
+    }
+  ],
+  error: null
+};
+
+function createFakeReviewService(initial, completed = initial) {
+  let state = structuredClone(initial);
+  let runCalls = 0;
+  return {
+    get runCalls() {
+      return runCalls;
+    },
+    getState() {
+      return structuredClone(state);
+    },
+    async run() {
+      runCalls += 1;
+      state = structuredClone(completed);
+      return structuredClone(state);
+    }
+  };
+}
+
+async function runningServer(t, { agentReviewService = null } = {}) {
   const publicDir = await mkdtemp(path.join(tmpdir(), 'vlp-public-'));
   await writeFile(path.join(publicDir, 'index.html'), '<h1>VLP</h1>');
   await writeFile(path.join(publicDir, 'app.js'), 'console.log("VLP")');
   await writeFile(path.join(publicDir, 'styles.css'), 'body{}');
-  const server = createVlpServer({ session, publicDir });
+  const server = createVlpServer({ session, publicDir, agentReviewService });
   const address = await listen(server, { port: 0 });
   t.after(() => server.close());
   return address;
@@ -39,7 +148,12 @@ test('serves the session, report API, static allowlist, and security headers', a
   const report = await fetch(`${address.url}/api/report`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ responses: [] })
+    body: JSON.stringify({
+      responses: [
+        { questionId: 'q-approved', decision: 'accept', answer: '25 results is correct.' },
+        { questionId: 'q-escalated', decision: 'correct', answer: 'Surface a typed search error.' }
+      ]
+    })
   });
   assert.equal(report.status, 200);
   assert.match((await report.json()).markdown, /VLP Review Report/);
@@ -48,6 +162,110 @@ test('serves the session, report API, static allowlist, and security headers', a
   assert.equal((await fetch(`${address.url}/app.js`)).headers.get('content-type'), 'text/javascript; charset=utf-8');
   assert.equal((await fetch(`${address.url}/../package.json`)).status, 404);
   assert.equal((await fetch(`${address.url}/unknown`)).status, 404);
+});
+
+test('serves the agent review API from server-owned state', async t => {
+  const fakeService = createFakeReviewService(readyAgentReview, approvedAgentReview);
+  const address = await runningServer(t, { agentReviewService: fakeService });
+
+  const initial = await fetch(`${address.url}/api/agent-review`);
+  assert.equal(initial.status, 200);
+  assert.deepEqual(await initial.json(), fakeService.getState());
+
+  const run = await fetch(`${address.url}/api/agent-review`, { method: 'POST' });
+  assert.equal(run.status, 200);
+  assert.equal((await run.json()).status, 'approved');
+  assert.equal(fakeService.runCalls, 1);
+
+  const wrongMethod = await fetch(`${address.url}/api/agent-review`, { method: 'DELETE' });
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get('allow'), 'GET, POST');
+});
+
+test('ignores forged agent review payloads and rejects browser overrides of agent-approved questions', async t => {
+  const fakeService = createFakeReviewService(approvedAgentReview);
+  const address = await runningServer(t, { agentReviewService: fakeService });
+
+  const forged = await fetch(`${address.url}/api/report`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      responses: [],
+      agentReview: {
+        status: 'approved',
+        provider: 'forged-provider',
+        model: 'forged-model',
+        threshold: 0.1,
+        startedAt: null,
+        completedAt: null,
+        summary: 'forged-summary',
+        results: []
+      }
+    })
+  });
+  assert.equal(forged.status, 200);
+  const forgedMarkdown = (await forged.json()).markdown;
+  assert.match(forgedMarkdown, /Reviewer: server-provider \/ server-model/);
+  assert.match(forgedMarkdown, /25 results is correct\./);
+  assert.match(forgedMarkdown, /Surface a typed search error\./);
+  assert.doesNotMatch(forgedMarkdown, /forged-provider|forged-model|forged-summary/);
+
+  const override = await fetch(`${address.url}/api/report`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      responses: [{
+        questionId: 'q-approved',
+        decision: 'correct',
+        answer: 'Override the approved answer.'
+      }]
+    })
+  });
+  assert.equal(override.status, 500);
+  assert.deepEqual(await override.json(), { error: 'Internal server error' });
+});
+
+test('rejects report generation while the agent review is running', async t => {
+  const fakeService = createFakeReviewService(runningAgentReview);
+  const address = await runningServer(t, { agentReviewService: fakeService });
+
+  const report = await fetch(`${address.url}/api/report`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ responses: [] })
+  });
+
+  assert.equal(report.status, 409);
+  assert.deepEqual(await report.json(), { error: 'Agent review is still running' });
+});
+
+test('falls back to not-configured review state and preserves manual reports without a service', async t => {
+  const address = await runningServer(t);
+
+  const reviewState = await fetch(`${address.url}/api/agent-review`);
+  assert.equal(reviewState.status, 200);
+  assert.deepEqual(await reviewState.json(), notConfiguredReview);
+
+  const run = await fetch(`${address.url}/api/agent-review`, { method: 'POST' });
+  assert.equal(run.status, 409);
+  assert.deepEqual(await run.json(), { error: 'Reviewer is not configured' });
+
+  const report = await fetch(`${address.url}/api/report`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      responses: [
+        { questionId: 'q-approved', decision: 'accept', answer: '25 results is correct.' },
+        { questionId: 'q-escalated', decision: 'correct', answer: 'Surface a typed search error.' }
+      ],
+      agentReview: approvedAgentReview
+    })
+  });
+  assert.equal(report.status, 200);
+  const markdown = (await report.json()).markdown;
+  assert.match(markdown, /## Accepted Generated Behavior/);
+  assert.doesNotMatch(markdown, /## Agent Review Audit/);
+  assert.doesNotMatch(markdown, /Reviewer: server-provider \/ server-model/);
 });
 
 test('rejects malformed, oversized, and disallowed API requests', async t => {
