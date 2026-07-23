@@ -278,7 +278,7 @@ test('reports agent-approved validation when all results are automatic', () => {
   assert.doesNotMatch(markdown, /Completed with human resolution/);
 });
 
-test('keeps missing agent results in audit, unresolved, and conservative final status', () => {
+test('keeps missing agent results conservative without suppressing valid effective instructions', () => {
   const incompleteReview = structuredClone(agentReview);
   incompleteReview.status = 'approved';
   incompleteReview.results = incompleteReview.results.filter(result => result.questionId !== 'q-open');
@@ -291,10 +291,42 @@ test('keeps missing agent results in audit, unresolved, and conservative final s
   assert.match(markdown, /q-open/);
   assert.match(markdown, /No agent review result was recorded for this question\./);
   assert.match(markdown, /## Unresolved Questions/);
+  assert.match(markdown, /Update the generated code to satisfy: Search name, description, category, and tags\./);
+  assert.match(markdown, /Preserve the behavior accepted in: q-accept\./);
+  assert.match(markdown, /Do not infer answers for unanswered or unreviewed questions; ask the user before changing those behaviors\./);
   assert.doesNotMatch(markdown, /Final validation status: Agent approved/);
   assert.doesNotMatch(markdown, /All targeted questions were reviewed\./);
-  assert.doesNotMatch(markdown, /Update the generated code to satisfy:/);
-  assert.doesNotMatch(markdown, /Preserve the behavior accepted in:/);
+});
+
+test('treats approved results with missing or invalid effective decisions as unresolved', () => {
+  const cases = [
+    { effectiveDecision: null, answer: 'Surface an error.' },
+    { effectiveDecision: 'maybe', answer: 'Surface an error.' },
+    { effectiveDecision: 'correct', answer: ' ' }
+  ];
+
+  for (const variant of cases) {
+    const invalidReview = structuredClone(agentReview);
+    invalidReview.status = 'approved';
+    invalidReview.results[3] = {
+      ...invalidReview.results[3],
+      status: 'approved',
+      effectiveDecision: variant.effectiveDecision,
+      answer: variant.answer
+    };
+
+    const markdown = buildReport(session, [], { agentReview: invalidReview });
+
+    assert.match(markdown, /Agent review status: Agent approved/);
+    assert.match(markdown, /Final validation status: Needs human review/);
+    assert.match(markdown, /Approved automatically: 3/);
+    assert.match(markdown, /q-open/);
+    assert.match(markdown, /Policy status: invalid-effective-decision/);
+    assert.match(markdown, /Approved agent result had an invalid or incomplete effective decision\./);
+    assert.doesNotMatch(markdown, /Final validation status: Agent approved/);
+    assert.doesNotMatch(markdown, /All targeted questions were reviewed\./);
+    assert.doesNotMatch(markdown, /Update the generated code to satisfy: Surface an error\./);
+  }
 });
 
 test('reports reviewer failures without claiming approval', () => {
