@@ -327,6 +327,153 @@ test('ignores unknown escalated agent results when deriving status and counts', 
   assert.doesNotMatch(markdown, /q-unknown/);
 });
 
+test('ignores duplicate unknown agent results when deriving status and counts', () => {
+  const approvedReview = structuredClone(agentReview);
+  approvedReview.status = 'approved';
+  approvedReview.results[3] = {
+    ...approvedReview.results[3],
+    status: 'approved',
+    effectiveDecision: 'correct',
+    answer: 'Surface an error.'
+  };
+  approvedReview.results.push({
+    questionId: 'q-unknown',
+    status: 'approved',
+    proposedDecision: 'correct',
+    effectiveDecision: 'correct',
+    answer: 'Ignore this raw result.',
+    rationale: 'This should not be mapped.',
+    confidence: 0.1,
+    intentBasis: 'inferred',
+    evidenceDocUnitIds: [],
+    escalationReasons: []
+  });
+  approvedReview.results.push({
+    questionId: 'q-unknown',
+    status: 'escalated',
+    proposedDecision: 'correct',
+    effectiveDecision: null,
+    answer: 'Ignore this raw result.',
+    rationale: 'This should not be mapped.',
+    confidence: 0.1,
+    intentBasis: 'inferred',
+    evidenceDocUnitIds: [],
+    escalationReasons: ['unknown-question']
+  });
+
+  const markdown = buildReport(session, [], { agentReview: approvedReview });
+
+  assert.match(markdown, /Agent review status: Agent approved/);
+  assert.match(markdown, /Final validation status: Agent approved/);
+  assert.match(markdown, /Approved automatically: 4/);
+  assert.match(markdown, /Escalated: 0/);
+  assert.doesNotMatch(markdown, /q-unknown/);
+});
+
+test('treats duplicate known agent results as ambiguous regardless of order', () => {
+  const duplicateSession = {
+    id: 'session-duplicate',
+    prompt: 'Duplicate question prompt.',
+    diagnostics: [],
+    questions: [
+      { id: 'q-open', type: 'api-use', severity: 'medium', title: 'Errors', ask: 'How should errors surface?', reason: 'No error path.', promptEvidence: '', docUnitIds: [] }
+    ],
+    docUnits: []
+  };
+  const duplicateApproved = {
+    questionId: 'q-open',
+    status: 'approved',
+    proposedDecision: 'correct',
+    effectiveDecision: 'correct',
+    answer: 'Surface an error.',
+    rationale: 'The prompt does not define the error type.',
+    confidence: 0.76,
+    intentBasis: 'inferred',
+    evidenceDocUnitIds: [],
+    escalationReasons: []
+  };
+  const duplicateEscalated = {
+    ...duplicateApproved,
+    status: 'escalated',
+    effectiveDecision: null,
+    escalationReasons: ['duplicate-agent-results']
+  };
+
+  const forwardReview = {
+    ...agentReview,
+    status: 'approved',
+    results: [duplicateApproved, duplicateEscalated]
+  };
+  const reverseReview = {
+    ...agentReview,
+    status: 'approved',
+    results: [duplicateEscalated, duplicateApproved]
+  };
+
+  const forward = buildReport(duplicateSession, [], { agentReview: forwardReview });
+  const reverse = buildReport(duplicateSession, [], { agentReview: reverseReview });
+
+  assert.equal(forward, reverse);
+  assert.match(forward, /duplicate-agent-results/);
+  assert.match(forward, /Final validation status: Needs human review/);
+  assert.match(forward, /Approved automatically: 0/);
+  assert.match(forward, /Escalated: 0/);
+  assert.match(forward, /## Unresolved Questions/);
+  assert.match(forward, /q-open/);
+  assert.match(forward, /No code corrections were requested\./);
+  assert.doesNotMatch(forward, /Update the generated code/);
+  assert.doesNotMatch(forward, /Preserve the behavior accepted/);
+  assert.doesNotMatch(forward, /All targeted questions were reviewed\./);
+});
+
+test('rejects human responses for duplicate known agent results', () => {
+  const duplicateSession = {
+    id: 'session-duplicate',
+    prompt: 'Duplicate question prompt.',
+    diagnostics: [],
+    questions: [
+      { id: 'q-open', type: 'api-use', severity: 'medium', title: 'Errors', ask: 'How should errors surface?', reason: 'No error path.', promptEvidence: '', docUnitIds: [] }
+    ],
+    docUnits: []
+  };
+  const duplicateReview = {
+    ...agentReview,
+    status: 'approved',
+    results: [
+      {
+        questionId: 'q-open',
+        status: 'escalated',
+        proposedDecision: 'correct',
+        effectiveDecision: null,
+        answer: 'Surface an error.',
+        rationale: 'The prompt does not define the error type.',
+        confidence: 0.76,
+        intentBasis: 'inferred',
+        evidenceDocUnitIds: [],
+        escalationReasons: ['duplicate-agent-results']
+      },
+      {
+        questionId: 'q-open',
+        status: 'approved',
+        proposedDecision: 'correct',
+        effectiveDecision: 'correct',
+        answer: 'Surface an error.',
+        rationale: 'The prompt does not define the error type.',
+        confidence: 0.76,
+        intentBasis: 'inferred',
+        evidenceDocUnitIds: [],
+        escalationReasons: []
+      }
+    ]
+  };
+
+  assert.throws(() => buildReport(duplicateSession, [{
+    questionId: 'q-open',
+    decision: 'correct',
+    answer: 'Surface a typed search error.'
+  }], { agentReview: duplicateReview }), /duplicate-agent-results|ambiguous/i);
+});
+
 test('keeps missing agent results conservative without suppressing valid effective instructions', () => {
   const incompleteReview = structuredClone(agentReview);
   incompleteReview.status = 'approved';

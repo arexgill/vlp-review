@@ -46,6 +46,24 @@ function validateResponses(session, responses) {
   });
 }
 
+function groupKnownAgentReviewResults(session, results) {
+  const knownQuestions = questionMap(session);
+  const grouped = new Map();
+
+  for (const result of Array.isArray(results) ? results : []) {
+    const questionId = clean(result?.questionId);
+    if (!knownQuestions.has(questionId)) continue;
+    const entries = grouped.get(questionId);
+    if (entries) {
+      entries.push(result);
+    } else {
+      grouped.set(questionId, [result]);
+    }
+  }
+
+  return grouped;
+}
+
 function manualEvidenceFor(session, question) {
   const ids = new Set(question.docUnitIds || []);
   return (session.docUnits || [])
@@ -226,6 +244,31 @@ function renderMissingResultUnresolvedQuestion(question) {
   ].join('\n');
 }
 
+function renderDuplicateResultAuditItem(question, resultCount) {
+  return [
+    `### ${cleanInline(question.title)} (${cleanInline(question.id)})`,
+    '',
+    '- Policy status: duplicate-agent-results',
+    `- Question: ${cleanInline(question.ask)}`,
+    '- Proposed decision: Conflicting agent results recorded',
+    '- Effective decision: Pending human review',
+    '- Confidence: Not available',
+    '- Intent basis: Not available',
+    '- Rationale: Multiple agent review results were recorded for this question.',
+    '- Escalation reasons: duplicate-agent-results',
+    `- Evidence: ${resultCount} raw results recorded.`
+  ].join('\n');
+}
+
+function renderDuplicateResultUnresolvedQuestion(question, resultCount) {
+  return [
+    `### ${cleanInline(question.title)} (${cleanInline(question.id)})`,
+    '',
+    `- **Question:** ${cleanInline(question.ask)}`,
+    `- **Reason:** duplicate-agent-results (${resultCount} raw results recorded)`
+  ].join('\n');
+}
+
 function renderInvalidEffectiveDecisionAuditItem(session, question, result) {
   const evidence = agentEvidenceForDocUnitIds(session, result?.evidenceDocUnitIds || []);
   const lines = [
@@ -394,12 +437,12 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
   const diagnostics = (session.diagnostics || []).map(diagnostic =>
     `- ${renderFilePath(diagnostic.file)}:${diagnostic.line || 1} — ${cleanInline(diagnostic.message)}`);
   const results = Array.isArray(agentReview?.results) ? agentReview.results : [];
-  const knownQuestionIds = new Set(questions.map(question => question.id));
+  const resultGroups = groupKnownAgentReviewResults(session, results);
   const resultById = new Map();
-  for (const result of results) {
-    const questionId = clean(result?.questionId);
-    if (!knownQuestionIds.has(questionId) || resultById.has(questionId)) continue;
-    resultById.set(questionId, result);
+  for (const [questionId, group] of resultGroups.entries()) {
+    if (group.length === 1) {
+      resultById.set(questionId, group[0]);
+    }
   }
   const humanResponseById = new Map();
   const canUseEffectiveResults = EFFECTIVE_AGENT_STATUSES.has(clean(agentReview?.status));
@@ -411,6 +454,10 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
   };
 
   for (const response of humanResponses) {
+    const responseGroup = resultGroups.get(response.questionId);
+    if (responseGroup && responseGroup.length > 1) {
+      throw new Error(`Cannot answer duplicate-agent-results question: ${response.questionId}`);
+    }
     const result = resultById.get(response.questionId);
     if (clean(result?.status) === 'approved') {
       throw new Error(`cannot override agent-approved question: ${response.questionId}`);
@@ -439,8 +486,15 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
   let automaticCount = 0;
 
   for (const question of questions) {
+    const resultGroup = resultGroups.get(question.id) || [];
     const result = resultById.get(question.id);
     const humanResolution = humanResponseById.get(question.id) || null;
+
+    if (resultGroup.length > 1) {
+      auditItems.push(renderDuplicateResultAuditItem(question, resultGroup.length));
+      unresolved.push(renderDuplicateResultUnresolvedQuestion(question, resultGroup.length));
+      continue;
+    }
 
     if (!result) {
       if (canUseEffectiveResults) {
