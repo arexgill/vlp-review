@@ -228,6 +228,78 @@ test('rejects browser responses for questions outside escalated agent results', 
   }], { agentReview: partialReview }), /non-escalated|unknown/i);
 });
 
+test('flattens untrusted inline markdown content in agent audit and repair instructions', () => {
+  const injectedReview = structuredClone(agentReview);
+  injectedReview.provider = 'openai-compatible\n## injected-provider-heading';
+  injectedReview.summary = 'Three grounded decisions.\n## injected-summary-heading';
+  injectedReview.results[0] = {
+    ...injectedReview.results[0],
+    rationale: 'Description is explicit.\n## injected-rationale-heading',
+    answer: 'Search name, description, category, and tags.\n## injected-answer-heading'
+  };
+
+  const markdown = buildReport(session, [{
+    questionId: 'q-open',
+    decision: 'correct',
+    answer: 'Surface a typed search error.\n## injected-human-heading'
+  }], { agentReview: injectedReview });
+
+  assert.doesNotMatch(markdown, /\n## injected-/);
+  assert.match(markdown, /injected-provider-heading/);
+  assert.match(markdown, /injected-summary-heading/);
+  assert.match(markdown, /injected-rationale-heading/);
+  assert.match(markdown, /injected-answer-heading/);
+  assert.match(markdown, /injected-human-heading/);
+});
+
+test('does not claim agent approval when approved review still contains unresolved escalations', () => {
+  const contradictoryReview = structuredClone(agentReview);
+  contradictoryReview.status = 'approved';
+
+  const markdown = buildReport(session, [], { agentReview: contradictoryReview });
+
+  assert.match(markdown, /Final validation status: Needs human review/);
+  assert.doesNotMatch(markdown, /Final validation status: Agent approved/);
+  assert.doesNotMatch(markdown, /All targeted questions were reviewed\./);
+});
+
+test('keeps contradictory approved reviews conservative after human escalation answers', () => {
+  const contradictoryReview = structuredClone(agentReview);
+  contradictoryReview.status = 'approved';
+
+  const markdown = buildReport(session, [{
+    questionId: 'q-open',
+    decision: 'correct',
+    answer: 'Surface a typed search error.'
+  }], { agentReview: contradictoryReview });
+
+  assert.match(markdown, /Final validation status: Completed with human resolution/);
+  assert.doesNotMatch(markdown, /Final validation status: Agent approved/);
+  assert.doesNotMatch(markdown, /All targeted questions were reviewed\./);
+});
+
+test('redacts absolute evidence and diagnostic paths while preserving useful filenames', () => {
+  const absolutePathSession = structuredClone(session);
+  absolutePathSession.docUnits = [
+    { ...absolutePathSession.docUnits[0], file: '/Users/alex/private/search.js' },
+    { ...absolutePathSession.docUnits[1], file: 'C:\\private\\search.js' },
+    absolutePathSession.docUnits[2]
+  ];
+  absolutePathSession.diagnostics = [
+    { file: '/Users/alex/private/search.js', line: 3, message: 'Unexpected token' },
+    { file: 'C:\\private\\search.js', line: 8, message: 'Access denied' }
+  ];
+
+  const markdown = buildReport(absolutePathSession, responses);
+
+  assert.doesNotMatch(markdown, /\/Users\/alex\/private\/search\.js/);
+  assert.doesNotMatch(markdown, /C:\\private\\search\.js/);
+  assert.match(markdown, /search\.js:4 — searchProducts reads product\.name\./);
+  assert.match(markdown, /search\.js:6 — It limits to 25\./);
+  assert.match(markdown, /search\.js:3 — Unexpected token/);
+  assert.match(markdown, /search\.js:8 — Access denied/);
+});
+
 test('rejects unknown questions, decisions, duplicate answers, and empty corrections', () => {
   assert.throws(() => buildReport(session, [{ questionId: 'bad', decision: 'accept', answer: '' }]), /Unknown question/);
   assert.throws(() => buildReport(session, [{ questionId: 'q-correct', decision: 'maybe', answer: '' }]), /Invalid decision/);

@@ -1,9 +1,23 @@
+import path from 'node:path';
+
 const DECISIONS = new Set(['accept', 'correct', 'irrelevant']);
 const MAX_ANSWER_LENGTH = 4000;
 const EFFECTIVE_AGENT_STATUSES = new Set(['approved', 'needs-human']);
 
 function clean(value) {
   return String(value ?? '').replaceAll('\0', '').replace(/\r\n?/g, '\n').trim();
+}
+
+function cleanInline(value) {
+  return clean(value).replace(/\s*\n+\s*/g, ' ');
+}
+
+function renderFilePath(value) {
+  const file = cleanInline(value);
+  if (!file) return '';
+  if (path.win32.isAbsolute(file)) return path.win32.basename(file).replaceAll('\\', '/');
+  if (path.posix.isAbsolute(file)) return path.posix.basename(file);
+  return file.replaceAll('\\', '/');
 }
 
 function questionMap(session) {
@@ -35,7 +49,7 @@ function evidenceForDocUnitIds(session, docUnitIds = []) {
   const ids = new Set(docUnitIds || []);
   return (session.docUnits || [])
     .filter(unit => ids.has(unit.id))
-    .map(unit => `${clean(unit.file)}:${unit.lineStart || 1} — ${clean(unit.text)}`);
+    .map(unit => `${renderFilePath(unit.file)}:${unit.lineStart || 1} — ${cleanInline(unit.text)}`);
 }
 
 function evidenceFor(session, question) {
@@ -44,13 +58,13 @@ function evidenceFor(session, question) {
 
 function renderResolvedItem(session, question, response, { feedbackLabel = 'User feedback' } = {}) {
   const lines = [
-    `### ${clean(question.title)} (${question.id})`,
+    `### ${cleanInline(question.title)} (${cleanInline(question.id)})`,
     '',
-    `- **Decision:** ${response.decision}`,
-    `- **Question:** ${clean(question.ask)}`
+    `- **Decision:** ${cleanInline(response.decision)}`,
+    `- **Question:** ${cleanInline(question.ask)}`
   ];
-  if (response.answer) lines.push(`- **${feedbackLabel}:** ${response.answer}`);
-  if (question.promptEvidence) lines.push(`- **Prompt trace:** ${clean(question.promptEvidence)}`);
+  if (response.answer) lines.push(`- **${cleanInline(feedbackLabel)}:** ${cleanInline(response.answer)}`);
+  if (question.promptEvidence) lines.push(`- **Prompt trace:** ${cleanInline(question.promptEvidence)}`);
   const evidence = evidenceFor(session, question);
   lines.push(`- **Code/documentation trace:** ${evidence.length ? evidence.join('; ') : 'No direct source line was linked.'}`);
   return lines.join('\n');
@@ -85,9 +99,12 @@ function agentReviewStatusLabel(status) {
   }
 }
 
-function finalValidationStatus(agentReview, unresolvedCount) {
+function finalValidationStatus(agentReview, unresolvedCount, escalatedCount) {
   switch (clean(agentReview?.status)) {
     case 'approved':
+      if (escalatedCount > 0) {
+        return unresolvedCount > 0 ? 'Needs human review' : 'Completed with human resolution';
+      }
       return 'Agent approved';
     case 'failed':
       return 'Reviewer failed';
@@ -98,27 +115,38 @@ function finalValidationStatus(agentReview, unresolvedCount) {
   }
 }
 
+function shouldClaimAllReviewed(agentReview, finalStatus, escalatedCount) {
+  switch (clean(agentReview?.status)) {
+    case 'approved':
+      return escalatedCount === 0 && finalStatus === 'Agent approved';
+    case 'needs-human':
+      return finalStatus === 'Completed with human resolution';
+    default:
+      return false;
+  }
+}
+
 function renderAuditItem(session, question, result, humanResolution) {
   const evidence = evidenceForDocUnitIds(session, result?.evidenceDocUnitIds || []);
   const lines = [
-    `### ${clean(question.title)} (${question.id})`,
+    `### ${cleanInline(question.title)} (${cleanInline(question.id)})`,
     '',
-    `- Policy status: ${clean(result?.status) || 'unknown'}`,
-    `- Question: ${clean(question.ask)}`,
-    `- Proposed decision: ${clean(result?.proposedDecision) || 'None'}`,
-    `- Effective decision: ${clean(result?.effectiveDecision) || (humanResolution ? humanResolution.decision : 'Pending human review')}`,
+    `- Policy status: ${cleanInline(result?.status) || 'unknown'}`,
+    `- Question: ${cleanInline(question.ask)}`,
+    `- Proposed decision: ${cleanInline(result?.proposedDecision) || 'None'}`,
+    `- Effective decision: ${cleanInline(result?.effectiveDecision) || (humanResolution ? cleanInline(humanResolution.decision) : 'Pending human review')}`,
     `- Confidence: ${formatPercent(result?.confidence)}`,
-    `- Intent basis: ${clean(result?.intentBasis) || 'Not available'}`,
-    `- Rationale: ${clean(result?.rationale) || 'None provided.'}`,
-    `- Escalation reasons: ${(result?.escalationReasons || []).length ? result.escalationReasons.map(clean).join(', ') : 'None'}`,
+    `- Intent basis: ${cleanInline(result?.intentBasis) || 'Not available'}`,
+    `- Rationale: ${cleanInline(result?.rationale) || 'None provided.'}`,
+    `- Escalation reasons: ${(result?.escalationReasons || []).length ? result.escalationReasons.map(cleanInline).join(', ') : 'None'}`,
     `- Evidence: ${evidence.length ? evidence.join('; ') : 'No direct source line was linked.'}`
   ];
 
   if (clean(result?.answer)) {
-    lines.push(`- Agent answer: ${clean(result.answer)}`);
+    lines.push(`- Agent answer: ${cleanInline(result.answer)}`);
   }
   if (humanResolution) {
-    lines.push(`- Human resolution: ${humanResolution.decision}${humanResolution.answer ? ` — ${humanResolution.answer}` : ''}`);
+    lines.push(`- Human resolution: ${cleanInline(humanResolution.decision)}${humanResolution.answer ? ` — ${cleanInline(humanResolution.answer)}` : ''}`);
   }
 
   return lines.join('\n');
@@ -127,29 +155,29 @@ function renderAuditItem(session, question, result, humanResolution) {
 function renderUnresolvedEscalation(session, question, result) {
   const evidence = evidenceForDocUnitIds(session, result?.evidenceDocUnitIds || []);
   return [
-    `### ${clean(question.title)} (${question.id})`,
+    `### ${cleanInline(question.title)} (${cleanInline(question.id)})`,
     '',
-    `- **Question:** ${clean(question.ask)}`,
-    `- **Agent proposal:** ${clean(result?.proposedDecision) || 'None'}`,
-    `- **Rationale:** ${clean(result?.rationale) || 'None provided.'}`,
-    `- **Escalation reasons:** ${(result?.escalationReasons || []).length ? result.escalationReasons.map(clean).join(', ') : 'Not provided.'}`,
+    `- **Question:** ${cleanInline(question.ask)}`,
+    `- **Agent proposal:** ${cleanInline(result?.proposedDecision) || 'None'}`,
+    `- **Rationale:** ${cleanInline(result?.rationale) || 'None provided.'}`,
+    `- **Escalation reasons:** ${(result?.escalationReasons || []).length ? result.escalationReasons.map(cleanInline).join(', ') : 'Not provided.'}`,
     `- **Evidence:** ${evidence.length ? evidence.join('; ') : 'No direct source line was linked.'}`
   ].join('\n');
 }
 
-function buildAgentRepairInstructions(session, questions, effectiveResponses, finalStatus) {
+function buildAgentRepairInstructions(session, questions, effectiveResponses, agentReview, finalStatus, escalatedCount) {
   const repairItems = effectiveResponses
     .filter(response => response.decision === 'correct')
     .map((response, index) => {
       const question = questions.find(item => item.id === response.questionId);
       const evidence = question ? evidenceFor(session, question) : [];
       const trace = evidence.length ? ` Trace: ${evidence.join('; ')}.` : '';
-      return `${index + 1}. Update the generated code to satisfy: ${response.answer}.${trace}`;
+      return `${index + 1}. Update the generated code to satisfy: ${cleanInline(response.answer)}.${trace}`;
     });
 
   const acceptedIds = effectiveResponses
     .filter(response => response.decision === 'accept')
-    .map(response => response.questionId);
+    .map(response => cleanInline(response.questionId));
 
   return [
     ...(repairItems.length ? repairItems : ['No code corrections were requested.']),
@@ -157,7 +185,7 @@ function buildAgentRepairInstructions(session, questions, effectiveResponses, fi
     acceptedIds.length
       ? `Preserve the behavior accepted in: ${acceptedIds.join(', ')}.`
       : 'No generated behaviors were explicitly accepted.',
-    ['Agent approved', 'Completed with human resolution'].includes(finalStatus)
+    shouldClaimAllReviewed(agentReview, finalStatus, escalatedCount)
       ? 'All targeted questions were reviewed.'
       : 'Do not infer answers for unanswered or unreviewed questions; ask the user before changing those behaviors.',
     'After editing, run the project tests and report any behavior that could not be implemented.'
@@ -177,10 +205,10 @@ export function buildManualReport(session, rawResponses = []) {
     const response = responseById.get(question.id);
     if (!response) {
       unresolved.push([
-        `### ${clean(question.title)} (${question.id})`,
+        `### ${cleanInline(question.title)} (${cleanInline(question.id)})`,
         '',
-        `- **Question:** ${clean(question.ask)}`,
-        `- **Reason:** ${clean(question.reason)}`
+        `- **Question:** ${cleanInline(question.ask)}`,
+        `- **Reason:** ${cleanInline(question.reason)}`
       ].join('\n'));
       continue;
     }
@@ -191,7 +219,7 @@ export function buildManualReport(session, rawResponses = []) {
   }
 
   const diagnostics = (session.diagnostics || []).map(diagnostic =>
-    `- ${clean(diagnostic.file)}:${diagnostic.line || 1} — ${clean(diagnostic.message)}`);
+    `- ${renderFilePath(diagnostic.file)}:${diagnostic.line || 1} — ${cleanInline(diagnostic.message)}`);
 
   const repairItems = responses
     .filter(response => response.decision === 'correct')
@@ -199,7 +227,7 @@ export function buildManualReport(session, rawResponses = []) {
       const question = questions.find(item => item.id === response.questionId);
       const evidence = question ? evidenceFor(session, question) : [];
       const trace = evidence.length ? ` Trace: ${evidence.join('; ')}.` : '';
-      return `${index + 1}. Update the generated code to satisfy: ${response.answer}.${trace}`;
+      return `${index + 1}. Update the generated code to satisfy: ${cleanInline(response.answer)}.${trace}`;
     });
 
   const acceptedIds = responses
@@ -221,7 +249,7 @@ export function buildManualReport(session, rawResponses = []) {
   return [
     '# VLP Review Report',
     '',
-    `Session: ${clean(session.id)}`,
+    `Session: ${cleanInline(session.id)}`,
     '',
     '## Review Summary',
     '',
@@ -258,7 +286,7 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
   const humanResponses = validateResponses(session, rawResponses);
   const questions = session.questions || [];
   const diagnostics = (session.diagnostics || []).map(diagnostic =>
-    `- ${clean(diagnostic.file)}:${diagnostic.line || 1} — ${clean(diagnostic.message)}`);
+    `- ${renderFilePath(diagnostic.file)}:${diagnostic.line || 1} — ${cleanInline(diagnostic.message)}`);
   const results = Array.isArray(agentReview?.results) ? agentReview.results : [];
   const resultById = new Map(results.map(result => [clean(result?.questionId), result]));
   const humanResponseById = new Map();
@@ -321,13 +349,13 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
 
   const automaticCount = results.filter(result => clean(result?.status) === 'approved').length;
   const escalatedCount = results.filter(result => clean(result?.status) === 'escalated').length;
-  const finalStatus = finalValidationStatus(agentReview, unresolved.length);
-  const repairInstructions = buildAgentRepairInstructions(session, questions, effectiveResponses, finalStatus);
+  const finalStatus = finalValidationStatus(agentReview, unresolved.length, escalatedCount);
+  const repairInstructions = buildAgentRepairInstructions(session, questions, effectiveResponses, agentReview, finalStatus, escalatedCount);
 
   return [
     '# VLP Review Report',
     '',
-    `Session: ${clean(session.id)}`,
+    `Session: ${cleanInline(session.id)}`,
     '',
     '## Review Summary',
     '',
@@ -343,16 +371,16 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
     '',
     '## Agent Review Audit',
     '',
-    `- Reviewer: ${clean(agentReview?.provider) || 'Unknown'} / ${clean(agentReview?.model) || 'Unknown'}`,
+    `- Reviewer: ${cleanInline(agentReview?.provider) || 'Unknown'} / ${cleanInline(agentReview?.model) || 'Unknown'}`,
     `- Agent review status: ${agentReviewStatusLabel(agentReview?.status)}`,
     `- Final validation status: ${finalStatus}`,
     `- Policy threshold: ${formatThreshold(agentReview?.threshold)}`,
     `- Automatic decisions: ${automaticCount}`,
     `- Escalated decisions: ${escalatedCount}`,
-    `- Started at: ${clean(agentReview?.startedAt) || 'Not available'}`,
-    `- Completed at: ${clean(agentReview?.completedAt) || 'Not available'}`,
-    `- Reviewer summary: ${clean(agentReview?.summary) || 'None provided.'}`,
-    agentReview?.error ? `- Reviewer error: ${clean(agentReview.error.message) || 'Unknown error'}` : '- Reviewer error: None',
+    `- Started at: ${cleanInline(agentReview?.startedAt) || 'Not available'}`,
+    `- Completed at: ${cleanInline(agentReview?.completedAt) || 'Not available'}`,
+    `- Reviewer summary: ${cleanInline(agentReview?.summary) || 'None provided.'}`,
+    agentReview?.error ? `- Reviewer error: ${cleanInline(agentReview.error.message) || 'Unknown error'}` : '- Reviewer error: None',
     '',
     auditItems.length ? auditItems.join('\n\n') : 'No agent review results were recorded.',
     '',
