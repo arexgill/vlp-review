@@ -25,6 +25,7 @@ const session = {
 };
 
 const input = createReviewInput(session);
+const oversizedId = 'x'.repeat(4001);
 
 function codes(result) {
   return result.issues.map(issue => issue.code);
@@ -62,6 +63,27 @@ test('retains a valid provider decision', () => {
   assert.equal(valid.issues.length, 0);
   assert.equal(valid.decisions.length, 1);
   assert.equal(valid.decisions[0].questionId, 'q-1');
+});
+
+test('rejects confidence values that are not numbers', () => {
+  for (const confidence of ['0.9', true]) {
+    const result = validateReviewContent(JSON.stringify({
+      summary: 'Bad confidence type.',
+      decisions: [{
+        questionId: 'q-1',
+        decision: 'correct',
+        answer: 'Search title and description.',
+        rationale: 'Type should be rejected.',
+        confidence,
+        intentBasis: 'explicit-prompt',
+        evidenceDocUnitIds: ['doc-linked']
+      }]
+    }), input);
+
+    assert.equal(result.decisions.length, 0);
+    assert.ok(codes(result).includes('invalid-confidence'));
+    assert.ok(codes(result).includes('missing-decision'));
+  }
 });
 
 test('returns invalid-json and missing-decision for malformed content', () => {
@@ -284,3 +306,57 @@ for (const [name, content, expectedCode] of [
     assert.equal(result.decisions.length, 0);
   });
 }
+
+test('rejects oversized question ids without leaking them into issues', () => {
+  const longQuestionId = 'q'.repeat(4001);
+  const result = validateReviewContent(JSON.stringify({
+    summary: 'Oversized question id.',
+    decisions: [{
+      questionId: longQuestionId,
+      decision: 'correct',
+      answer: 'Search title and description.',
+      rationale: 'Too long.',
+      confidence: 0.91,
+      intentBasis: 'explicit-prompt',
+      evidenceDocUnitIds: ['doc-linked']
+    }]
+  }), input);
+
+  assert.equal(result.decisions.length, 0);
+  assert.ok(codes(result).includes('oversized-text'));
+  assert.ok(!JSON.stringify(result.issues).includes(longQuestionId));
+});
+
+test('rejects oversized linked evidence ids', () => {
+  const oversizedInput = createReviewInput({
+    ...session,
+    docUnits: [{
+      id: oversizedId,
+      file: 'search.js',
+      lineStart: 4,
+      text: 'Reads product.title.',
+      code: 'product.title'
+    }],
+    questions: [{
+      ...session.questions[0],
+      docUnitIds: [oversizedId]
+    }]
+  });
+
+  const result = validateReviewContent(JSON.stringify({
+    summary: 'Oversized evidence id.',
+    decisions: [{
+      questionId: 'q-1',
+      decision: 'correct',
+      answer: 'Search title and description.',
+      rationale: 'Long evidence id should not pass.',
+      confidence: 0.91,
+      intentBasis: 'explicit-prompt',
+      evidenceDocUnitIds: [oversizedId]
+    }]
+  }), oversizedInput);
+
+  assert.equal(result.decisions.length, 0);
+  assert.ok(codes(result).includes('oversized-text'));
+  assert.ok(!JSON.stringify(result).includes(oversizedId));
+});

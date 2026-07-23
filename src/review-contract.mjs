@@ -10,9 +10,17 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function safeIssueQuestionId(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const cleaned = clean(value);
+  return cleaned.length > MAX_TEXT ? '' : cleaned;
+}
+
 function issue(questionId, code, message) {
   return {
-    questionId: clean(questionId),
+    questionId: safeIssueQuestionId(questionId),
     code,
     message: clean(message)
   };
@@ -63,57 +71,61 @@ export function createReviewInput(session) {
 
 function validateDecision(entry, question, evidenceIds) {
   const issues = [];
-  const questionId = clean(entry?.questionId);
+  const questionId = textValue(entry?.questionId, 'invalid-question-id');
   const decision = textValue(entry?.decision, 'invalid-decision');
   const answer = textValue(entry?.answer, 'invalid-answer');
   const rationale = textValue(entry?.rationale, 'invalid-rationale');
   const intentBasis = textValue(entry?.intentBasis, 'invalid-intent-basis');
   const evidence = entry?.evidenceDocUnitIds;
-  const confidence = Number(entry?.confidence);
+  const confidence = entry?.confidence;
 
-  if (questionId !== clean(question.id)) {
-    issues.push(issue(questionId, 'unknown-question', 'Decision targets a question that is not in the review input.'));
+  if (!questionId.ok) {
+    issues.push(issue(entry?.questionId, questionId.code, 'Question ids must be strings of at most 4000 characters.'));
+    return { issues, valid: false };
+  }
+  if (questionId.value !== clean(question.id)) {
+    issues.push(issue(questionId.value, 'unknown-question', 'Decision targets a question that is not in the review input.'));
     return { issues, valid: false };
   }
   if (!decision.ok || !DECISIONS.has(decision.value)) {
-    issues.push(issue(questionId, 'invalid-decision', 'Decision must be accept, correct, irrelevant, or escalate.'));
+    issues.push(issue(questionId.value, 'invalid-decision', 'Decision must be accept, correct, irrelevant, or escalate.'));
   }
   if (!intentBasis.ok || !INTENT_BASES.has(intentBasis.value)) {
-    issues.push(issue(questionId, 'invalid-intent-basis', 'Intent basis must be explicit-prompt, inferred, or absent.'));
+    issues.push(issue(questionId.value, 'invalid-intent-basis', 'Intent basis must be explicit-prompt, inferred, or absent.'));
   }
-  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
-    issues.push(issue(questionId, 'invalid-confidence', 'Confidence must be a number between 0 and 1.'));
+  if (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+    issues.push(issue(questionId.value, 'invalid-confidence', 'Confidence must be a number between 0 and 1.'));
   }
   if (!answer.ok) {
-    issues.push(issue(questionId, answer.code, 'Correction answer must be a string.'));
+    issues.push(issue(questionId.value, answer.code, 'Correction answer must be a string.'));
   } else if (decision.ok && decision.value === 'correct' && !answer.value) {
-    issues.push(issue(questionId, 'invalid-answer', 'A correction answer is required for correct decisions.'));
+    issues.push(issue(questionId.value, 'invalid-answer', 'A correction answer is required for correct decisions.'));
   }
   if (!rationale.ok) {
-    issues.push(issue(questionId, rationale.code, 'Rationale must be a string.'));
+    issues.push(issue(questionId.value, rationale.code, 'Rationale must be a string.'));
   }
   if (!Array.isArray(evidence)) {
-    issues.push(issue(questionId, 'invalid-evidence', 'Evidence must be an array of linked documentation ids.'));
+    issues.push(issue(questionId.value, 'invalid-evidence', 'Evidence must be an array of linked documentation ids.'));
   } else {
     const normalized = [];
     for (const item of evidence) {
-      if (typeof item !== 'string') {
-        issues.push(issue(questionId, 'invalid-evidence', 'Evidence must be an array of linked documentation ids.'));
+      const evidenceId = textValue(item, 'invalid-evidence');
+      if (!evidenceId.ok) {
+        issues.push(issue(questionId.value, evidenceId.code, 'Evidence ids must be strings of at most 4000 characters.'));
         break;
       }
-      const cleaned = clean(item);
-      if (!evidenceIds.has(cleaned)) {
-        issues.push(issue(questionId, 'invalid-evidence', 'Evidence must reference only linked documentation.'));
+      if (!evidenceIds.has(evidenceId.value)) {
+        issues.push(issue(questionId.value, 'invalid-evidence', 'Evidence must reference only linked documentation.'));
         break;
       }
-      normalized.push(cleaned);
+      normalized.push(evidenceId.value);
     }
     if (!issues.length) {
       return {
         issues,
         valid: true,
         decision: {
-          questionId,
+          questionId: questionId.value,
           decision: decision.value,
           answer: answer.value,
           rationale: rationale.value,
@@ -171,10 +183,14 @@ export function validateReviewContent(content, input) {
 
   const grouped = new Map();
   for (const entry of parsed.decisions) {
-    const questionId = clean(entry?.questionId);
-    const list = grouped.get(questionId) || [];
+    const questionId = textValue(entry?.questionId, 'invalid-question-id');
+    if (!questionId.ok) {
+      issues.push(issue(entry?.questionId, questionId.code, 'Question ids must be strings of at most 4000 characters.'));
+      continue;
+    }
+    const list = grouped.get(questionId.value) || [];
     list.push(entry);
-    grouped.set(questionId, list);
+    grouped.set(questionId.value, list);
   }
 
   const retained = new Map();
