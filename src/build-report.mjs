@@ -45,18 +45,39 @@ function validateResponses(session, responses) {
   });
 }
 
-function evidenceForDocUnitIds(session, docUnitIds = []) {
+function manualEvidenceFor(session, question) {
+  const ids = new Set(question.docUnitIds || []);
+  return (session.docUnits || [])
+    .filter(unit => ids.has(unit.id))
+    .map(unit => `${clean(unit.file)}:${unit.lineStart || 1} — ${clean(unit.text)}`);
+}
+
+function agentEvidenceForDocUnitIds(session, docUnitIds = []) {
   const ids = new Set(docUnitIds || []);
   return (session.docUnits || [])
     .filter(unit => ids.has(unit.id))
     .map(unit => `${renderFilePath(unit.file)}:${unit.lineStart || 1} — ${cleanInline(unit.text)}`);
 }
 
-function evidenceFor(session, question) {
-  return evidenceForDocUnitIds(session, question.docUnitIds || []);
+function agentEvidenceFor(session, question) {
+  return agentEvidenceForDocUnitIds(session, question.docUnitIds || []);
 }
 
-function renderResolvedItem(session, question, response, { feedbackLabel = 'User feedback' } = {}) {
+function renderManualResolvedItem(session, question, response) {
+  const lines = [
+    `### ${clean(question.title)} (${question.id})`,
+    '',
+    `- **Decision:** ${response.decision}`,
+    `- **Question:** ${clean(question.ask)}`
+  ];
+  if (response.answer) lines.push(`- **User feedback:** ${response.answer}`);
+  if (question.promptEvidence) lines.push(`- **Prompt trace:** ${clean(question.promptEvidence)}`);
+  const evidence = manualEvidenceFor(session, question);
+  lines.push(`- **Code/documentation trace:** ${evidence.length ? evidence.join('; ') : 'No direct source line was linked.'}`);
+  return lines.join('\n');
+}
+
+function renderAgentResolvedItem(session, question, response, { feedbackLabel = 'User feedback' } = {}) {
   const lines = [
     `### ${cleanInline(question.title)} (${cleanInline(question.id)})`,
     '',
@@ -65,7 +86,7 @@ function renderResolvedItem(session, question, response, { feedbackLabel = 'User
   ];
   if (response.answer) lines.push(`- **${cleanInline(feedbackLabel)}:** ${cleanInline(response.answer)}`);
   if (question.promptEvidence) lines.push(`- **Prompt trace:** ${cleanInline(question.promptEvidence)}`);
-  const evidence = evidenceFor(session, question);
+  const evidence = agentEvidenceFor(session, question);
   lines.push(`- **Code/documentation trace:** ${evidence.length ? evidence.join('; ') : 'No direct source line was linked.'}`);
   return lines.join('\n');
 }
@@ -127,7 +148,7 @@ function shouldClaimAllReviewed(agentReview, finalStatus, escalatedCount) {
 }
 
 function renderAuditItem(session, question, result, humanResolution) {
-  const evidence = evidenceForDocUnitIds(session, result?.evidenceDocUnitIds || []);
+  const evidence = agentEvidenceForDocUnitIds(session, result?.evidenceDocUnitIds || []);
   const lines = [
     `### ${cleanInline(question.title)} (${cleanInline(question.id)})`,
     '',
@@ -153,7 +174,7 @@ function renderAuditItem(session, question, result, humanResolution) {
 }
 
 function renderUnresolvedEscalation(session, question, result) {
-  const evidence = evidenceForDocUnitIds(session, result?.evidenceDocUnitIds || []);
+  const evidence = agentEvidenceForDocUnitIds(session, result?.evidenceDocUnitIds || []);
   return [
     `### ${cleanInline(question.title)} (${cleanInline(question.id)})`,
     '',
@@ -170,7 +191,7 @@ function buildAgentRepairInstructions(session, questions, effectiveResponses, ag
     .filter(response => response.decision === 'correct')
     .map((response, index) => {
       const question = questions.find(item => item.id === response.questionId);
-      const evidence = question ? evidenceFor(session, question) : [];
+      const evidence = question ? agentEvidenceFor(session, question) : [];
       const trace = evidence.length ? ` Trace: ${evidence.join('; ')}.` : '';
       return `${index + 1}. Update the generated code to satisfy: ${cleanInline(response.answer)}.${trace}`;
     });
@@ -205,29 +226,29 @@ export function buildManualReport(session, rawResponses = []) {
     const response = responseById.get(question.id);
     if (!response) {
       unresolved.push([
-        `### ${cleanInline(question.title)} (${cleanInline(question.id)})`,
+        `### ${clean(question.title)} (${question.id})`,
         '',
-        `- **Question:** ${cleanInline(question.ask)}`,
-        `- **Reason:** ${cleanInline(question.reason)}`
+        `- **Question:** ${clean(question.ask)}`,
+        `- **Reason:** ${clean(question.reason)}`
       ].join('\n'));
       continue;
     }
-    const rendered = renderResolvedItem(session, question, response);
+    const rendered = renderManualResolvedItem(session, question, response);
     if (response.decision === 'accept') accepted.push(rendered);
     if (response.decision === 'correct') corrected.push(rendered);
     if (response.decision === 'irrelevant') irrelevant.push(rendered);
   }
 
   const diagnostics = (session.diagnostics || []).map(diagnostic =>
-    `- ${renderFilePath(diagnostic.file)}:${diagnostic.line || 1} — ${cleanInline(diagnostic.message)}`);
+    `- ${clean(diagnostic.file)}:${diagnostic.line || 1} — ${clean(diagnostic.message)}`);
 
   const repairItems = responses
     .filter(response => response.decision === 'correct')
     .map((response, index) => {
       const question = questions.find(item => item.id === response.questionId);
-      const evidence = question ? evidenceFor(session, question) : [];
+      const evidence = question ? manualEvidenceFor(session, question) : [];
       const trace = evidence.length ? ` Trace: ${evidence.join('; ')}.` : '';
-      return `${index + 1}. Update the generated code to satisfy: ${cleanInline(response.answer)}.${trace}`;
+      return `${index + 1}. Update the generated code to satisfy: ${response.answer}.${trace}`;
     });
 
   const acceptedIds = responses
@@ -249,7 +270,7 @@ export function buildManualReport(session, rawResponses = []) {
   return [
     '# VLP Review Report',
     '',
-    `Session: ${cleanInline(session.id)}`,
+    `Session: ${clean(session.id)}`,
     '',
     '## Review Summary',
     '',
@@ -327,7 +348,7 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
         answer: clean(result.answer)
       };
       effectiveResponses.push(response);
-      const rendered = renderResolvedItem(session, question, response, { feedbackLabel: 'Effective guidance' });
+      const rendered = renderAgentResolvedItem(session, question, response, { feedbackLabel: 'Effective guidance' });
       if (response.decision === 'accept') accepted.push(rendered);
       if (response.decision === 'correct') corrected.push(rendered);
       if (response.decision === 'irrelevant') irrelevant.push(rendered);
@@ -337,7 +358,7 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
     if (clean(result.status) === 'escalated') {
       if (humanResolution) {
         effectiveResponses.push(humanResolution);
-        const rendered = renderResolvedItem(session, question, humanResolution, { feedbackLabel: 'Effective guidance' });
+        const rendered = renderAgentResolvedItem(session, question, humanResolution, { feedbackLabel: 'Effective guidance' });
         if (humanResolution.decision === 'accept') accepted.push(rendered);
         if (humanResolution.decision === 'correct') corrected.push(rendered);
         if (humanResolution.decision === 'irrelevant') irrelevant.push(rendered);

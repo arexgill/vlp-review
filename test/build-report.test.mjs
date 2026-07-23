@@ -88,6 +88,108 @@ Do not infer answers for unresolved questions; ask the user before changing thos
 After editing, run the project tests and report any behavior that could not be implemented.
 `;
 
+const manualCompatSession = {
+  id: 'session-manual\r\ncompat',
+  prompt: '\nPrompt line 1\r\nPrompt line 2\n',
+  diagnostics: [{ file: '/Users/alex/private/diagnostic.js', line: 7, message: 'Broken\r\nmessage' }],
+  questions: [
+    {
+      id: 'q-manual',
+      type: 'missing-step',
+      severity: 'high',
+      title: 'Title line 1\r\nTitle line 2',
+      ask: 'Ask line 1\r\nAsk line 2',
+      reason: 'Reason A',
+      promptEvidence: 'Prompt evidence 1\r\nPrompt evidence 2',
+      docUnitIds: ['doc-abs']
+    },
+    {
+      id: 'q-unresolved',
+      type: 'api-use',
+      severity: 'medium',
+      title: 'Unresolved title\r\ncontinued',
+      ask: 'Need input\r\nstill need input',
+      reason: 'Reason line 1\r\nReason line 2',
+      promptEvidence: '',
+      docUnitIds: []
+    }
+  ],
+  docUnits: [
+    { id: 'doc-abs', file: 'C:\\private\\search.js', lineStart: 4, text: 'Doc line 1\r\nDoc line 2', code: 'product.name' }
+  ]
+};
+
+const manualCompatResponses = [
+  { questionId: 'q-manual', decision: 'correct', answer: 'Answer line 1\r\nAnswer line 2' }
+];
+
+const manualCompatBaseline = `# VLP Review Report
+
+Session: session-manual
+compat
+
+## Review Summary
+
+- Targeted questions: 2
+- Accepted behaviors: 0
+- Corrected intents: 1
+- Marked irrelevant: 0
+- Unresolved: 1
+
+## Original Prompt
+
+Prompt line 1
+Prompt line 2
+
+## Corrected Intent
+
+### Title line 1
+Title line 2 (q-manual)
+
+- **Decision:** correct
+- **Question:** Ask line 1
+Ask line 2
+- **User feedback:** Answer line 1
+Answer line 2
+- **Prompt trace:** Prompt evidence 1
+Prompt evidence 2
+- **Code/documentation trace:** C:\\private\\search.js:4 — Doc line 1
+Doc line 2
+
+## Accepted Generated Behavior
+
+None
+
+## Marked Irrelevant
+
+None
+
+## Unresolved Questions
+
+### Unresolved title
+continued (q-unresolved)
+
+- **Question:** Need input
+still need input
+- **Reason:** Reason line 1
+Reason line 2
+
+## Parse Diagnostics
+
+- /Users/alex/private/diagnostic.js:7 — Broken
+message
+
+## Repair Instructions for Coding Agent
+
+1. Update the generated code to satisfy: Answer line 1
+Answer line 2. Trace: C:\\private\\search.js:4 — Doc line 1
+Doc line 2.
+
+No generated behaviors were explicitly accepted.
+Do not infer answers for unresolved questions; ask the user before changing those behaviors.
+After editing, run the project tests and report any behavior that could not be implemented.
+`;
+
 const agentReview = {
   status: 'needs-human',
   provider: 'openai-compatible',
@@ -126,6 +228,11 @@ test('builds the existing manual report byte-for-byte unchanged and without abso
   const markdown = buildReport(session, responses);
   assert.equal(markdown, manualBaseline);
   assert.doesNotMatch(markdown, /\/Users\//);
+});
+
+test('preserves legacy manual multiline formatting and file strings byte-for-byte', () => {
+  const markdown = buildReport(manualCompatSession, manualCompatResponses);
+  assert.equal(markdown, manualCompatBaseline);
 });
 
 test('renders an agent audit with automatic approvals and human escalation resolution', () => {
@@ -278,7 +385,7 @@ test('keeps contradictory approved reviews conservative after human escalation a
   assert.doesNotMatch(markdown, /All targeted questions were reviewed\./);
 });
 
-test('redacts absolute evidence and diagnostic paths while preserving useful filenames', () => {
+test('redacts absolute evidence and diagnostic paths in agent mode while preserving useful filenames', () => {
   const absolutePathSession = structuredClone(session);
   absolutePathSession.docUnits = [
     { ...absolutePathSession.docUnits[0], file: '/Users/alex/private/search.js' },
@@ -290,7 +397,11 @@ test('redacts absolute evidence and diagnostic paths while preserving useful fil
     { file: 'C:\\private\\search.js', line: 8, message: 'Access denied' }
   ];
 
-  const markdown = buildReport(absolutePathSession, responses);
+  const markdown = buildReport(absolutePathSession, [{
+    questionId: 'q-open',
+    decision: 'correct',
+    answer: 'Surface a typed search error.'
+  }], { agentReview });
 
   assert.doesNotMatch(markdown, /\/Users\/alex\/private\/search\.js/);
   assert.doesNotMatch(markdown, /C:\\private\\search\.js/);
