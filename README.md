@@ -1,8 +1,8 @@
 # VLP Review POC
 
-A local npm CLI for validating vibe-coded JavaScript and TypeScript against the prompt that generated it.
+A VLP-inspired npm CLI for human and agent review of vibe-coded JavaScript and TypeScript.
 
-VLP Review reads the original prompt and generated source, creates syntax-directed “literate” documentation, prioritizes suspicious intent/implementation mismatches, and opens an interactive browser review. Your decisions become a repair-ready Markdown brief for a coding agent.
+VLP Review reads the original prompt and generated source, creates syntax-directed “literate” documentation, prioritizes suspicious intent/implementation mismatches, and opens an interactive browser review. Manual mode is local-only and the default. Explicit remote agent mode can send the full prompt plus question-linked documentation/code excerpts to a configured reviewer endpoint. In both modes, the output is a repair-ready Markdown brief for a coding agent; VLP Review never edits reviewed source files.
 
 > This is a local proof of concept, not a correctness oracle. Every flag is a question for human judgment—not proof of a defect.
 
@@ -35,10 +35,36 @@ To remove the development link:
 npm unlink --global vlp-review-poc
 ```
 
+## Remote agent mode
+
+Remote agent review is explicit opt-in. Manual review remains the default and stays local-only.
+
+```bash
+export VLP_REVIEWER_API_KEY='your-provider-key'
+node bin/vlp-review.mjs \
+  --prompt examples/product-search/prompt.md \
+  --code examples/product-search/generated-code.js \
+  --reviewer openai-compatible \
+  --reviewer-model '<provider-model-id>' \
+  --auto-review
+```
+
+Agent mode operational facts:
+
+- `--reviewer`, `--reviewer-model`, `--reviewer-base-url`, and `--auto-review` are the remote-review flags.
+- `VLP_REVIEWER_API_KEY` is read only from the environment; there is no CLI flag for credentials.
+- Agent mode sends the full prompt plus only the targeted linked excerpts for each question to the configured endpoint.
+- Approved agent decisions require confidence `0.80` or higher and `explicit-prompt` grounding; anything else is escalated for human review.
+- Reviewer output creates report/repair instructions but never changes files.
+- The provider must support OpenAI-compatible `/chat/completions` requests and JSON-object responses.
+- Custom `http://` reviewer endpoints are accepted only for exact loopback hosts such as `127.0.0.1`, `localhost`, or `::1`; other endpoints must use HTTPS.
+- Automated tests use fake/local reviewer endpoints only. They do not make real model calls.
+- This remains a review aid, not a correctness guarantee.
+
 ## CLI
 
 ```text
-vlp-review --prompt <file> --code <file-or-directory> [--port <number>] [--no-open]
+vlp-review --prompt <file> --code <file-or-directory> [--port <number>] [--reviewer <provider> --reviewer-model <model> [--reviewer-base-url <url>] [--auto-review]] [--no-open]
 ```
 
 | Option | Meaning |
@@ -46,8 +72,16 @@ vlp-review --prompt <file> --code <file-or-directory> [--port <number>] [--no-op
 | `--prompt <file>` | Required UTF-8 text or Markdown prompt. |
 | `--code <path>` | Required generated source file or directory. |
 | `--port <number>` | Local port from 1–65535. Default: `4317`. |
+| `--reviewer <provider>` | Enable explicit remote agent mode. Currently supports `openai-compatible`. |
+| `--reviewer-model <model>` | Required reviewer model identifier when `--reviewer` is set. |
+| `--reviewer-base-url <url>` | Optional reviewer API base URL. Defaults to `https://api.openai.com/v1`; custom `http://` URLs must be loopback-only. |
+| `--auto-review` | Run the configured remote reviewer before the browser session opens. |
 | `--no-open` | Start the server without opening a browser. |
 | `-h`, `--help` | Print usage. |
+
+| Environment | Meaning |
+| --- | --- |
+| `VLP_REVIEWER_API_KEY` | Reviewer credential for explicit remote agent mode. Required by the configured provider, but only read from the environment. |
 
 When `--code` points to a directory, discovery is recursive and deterministic.
 
@@ -67,19 +101,22 @@ For each question, choose:
 - **Correct intent** — enter the behavior the code should implement.
 - **Not relevant** — exclude the question from repair instructions.
 
-Responses persist in browser `localStorage` under the session fingerprint, so a refresh does not discard the review. The final brief can be copied or downloaded.
+Responses persist in browser `localStorage` under the session fingerprint, so a refresh does not discard the review. The final brief can be copied or downloaded. In remote agent mode, agent-approved items are read-only until an escalated item requires human resolution.
 
 ## Privacy and security boundaries
 
-- The HTTP server binds only to `127.0.0.1`.
-- Prompt, source, documentation, and responses are never sent to a remote service.
-- No LLM API key is required.
+- The CLI HTTP server always binds only to `127.0.0.1`.
+- Manual mode is the default and remains local-only: prompt, source, documentation, and review responses stay on this machine.
+- Explicit remote agent mode sends the full prompt plus question-linked documentation/code excerpts to the configured reviewer endpoint. It does not ship the entire reviewed source tree unless those excerpts are linked into questions.
+- `VLP_REVIEWER_API_KEY` is only consulted when remote agent mode is explicitly configured.
 - Source is parsed as text and is never imported, executed, or evaluated.
-- Static serving uses an allowlist; project files cannot be fetched through the server.
+- Static serving uses an allowlist; project files cannot be fetched through the browser server.
 - API request bodies are limited to 256 KiB.
 - Responses use a restrictive Content Security Policy and `no-store` caching.
+- Reviewer suggestions can approve or escalate questions and feed the generated repair brief, but they do not modify files.
+- There is no correctness guarantee: both the local heuristics and any configured remote reviewer can be wrong.
 
-You can confirm the local boundary in browser developer tools: session traffic should include only the current `127.0.0.1` origin.
+You can confirm the browser boundary in developer tools: browser traffic should stay on the current `127.0.0.1` origin. In remote agent mode, only the local CLI server should contact the configured reviewer endpoint.
 
 ## Supported source
 
@@ -159,7 +196,7 @@ This package demonstrates only a practical version of the human-review workflow.
 
 - No automatic source edits.
 - No code execution or test running against the reviewed project.
-- No remote model integration.
+- No non-OpenAI-compatible reviewer integrations yet.
 - No Python or non-JS/TS language adapters yet.
 - No public npm publication in this task.
 - No formal guarantee that accepted code matches user intent.
