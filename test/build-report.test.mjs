@@ -295,6 +295,38 @@ test('reports agent-approved validation when all results are automatic', () => {
   assert.doesNotMatch(markdown, /Completed with human resolution/);
 });
 
+test('ignores unknown escalated agent results when deriving status and counts', () => {
+  const approvedReview = structuredClone(agentReview);
+  approvedReview.status = 'approved';
+  approvedReview.results[3] = {
+    ...approvedReview.results[3],
+    status: 'approved',
+    effectiveDecision: 'correct',
+    answer: 'Surface an error.'
+  };
+  approvedReview.results.push({
+    questionId: 'q-unknown',
+    status: 'escalated',
+    proposedDecision: 'correct',
+    effectiveDecision: null,
+    answer: 'Ignore this raw result.',
+    rationale: 'This should not be mapped.',
+    confidence: 0.1,
+    intentBasis: 'inferred',
+    evidenceDocUnitIds: [],
+    escalationReasons: ['unknown-question']
+  });
+
+  const markdown = buildReport(session, [], { agentReview: approvedReview });
+
+  assert.match(markdown, /Agent review status: Agent approved/);
+  assert.match(markdown, /Final validation status: Agent approved/);
+  assert.match(markdown, /Approved automatically: 4/);
+  assert.match(markdown, /Escalated: 0/);
+  assert.doesNotMatch(markdown, /Completed with human resolution/);
+  assert.doesNotMatch(markdown, /q-unknown/);
+});
+
 test('keeps missing agent results conservative without suppressing valid effective instructions', () => {
   const incompleteReview = structuredClone(agentReview);
   incompleteReview.status = 'approved';

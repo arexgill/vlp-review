@@ -394,7 +394,13 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
   const diagnostics = (session.diagnostics || []).map(diagnostic =>
     `- ${renderFilePath(diagnostic.file)}:${diagnostic.line || 1} — ${cleanInline(diagnostic.message)}`);
   const results = Array.isArray(agentReview?.results) ? agentReview.results : [];
-  const resultById = new Map(results.map(result => [clean(result?.questionId), result]));
+  const knownQuestionIds = new Set(questions.map(question => question.id));
+  const resultById = new Map();
+  for (const result of results) {
+    const questionId = clean(result?.questionId);
+    if (!knownQuestionIds.has(questionId) || resultById.has(questionId)) continue;
+    resultById.set(questionId, result);
+  }
   const humanResponseById = new Map();
   const canUseEffectiveResults = EFFECTIVE_AGENT_STATUSES.has(clean(agentReview?.status));
   const isValidApprovedResult = result => {
@@ -489,7 +495,7 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
     }
   }
 
-  const escalatedCount = results.filter(result => clean(result?.status) === 'escalated').length;
+  const escalatedCount = questions.filter(question => clean(resultById.get(question.id)?.status) === 'escalated').length;
   const finalStatus = finalValidationStatus(agentReview, unresolved.length, escalatedCount);
   const canRenderEffectiveSections = canUseEffectiveResults;
   const repairInstructions = canRenderEffectiveSections
