@@ -1,6 +1,9 @@
 const state = {
   session: null,
+  sessionLoadFailed: false,
   agentReview: null,
+  reviewerSyncPending: true,
+  reviewerSyncError: null,
   agentPolling: null,
   agentRunGeneration: 0,
   sourceIndex: 0,
@@ -24,6 +27,8 @@ const ids = [
 const elements = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
 
 const LOCAL_PRIVACY_COPY = 'Review the places where generated code may have drifted from your prompt. Local mode keeps the review on this machine.';
+const UNKNOWN_PRIVACY_COPY = 'Review the places where generated code may have drifted from your prompt. Reviewer status is unavailable. No remote agent request has been initiated.';
+const LOADING_PRIVACY_COPY = 'Review the places where generated code may have drifted from your prompt. Checking reviewer status. No remote agent request has been initiated.';
 const REMOTE_PRIVACY_COPY = 'Review the places where generated code may have drifted from your prompt. Remote agent mode sends the prompt and linked excerpts to your configured reviewer.';
 const REVIEW_STATUS_LABELS = {
   ready: 'Agent review has not run yet.',
@@ -67,6 +72,19 @@ function clearAgentPolling() {
   }
 }
 
+function hasAuthoritativeAgentReview() {
+  return state.agentReview !== null;
+}
+
+function reviewerModeUnknown() {
+  return !hasAuthoritativeAgentReview();
+}
+
+function reviewerSyncState(review = state.agentReview) {
+  if (!review) return state.reviewerSyncPending ? 'loading' : 'unavailable';
+  return state.reviewerSyncError ? 'unavailable' : (review.status || 'ready');
+}
+
 function agentResult(questionId) {
   return state.agentReview?.results?.find(result => result.questionId === questionId) || null;
 }
@@ -77,20 +95,6 @@ function isAgentMode() {
 
 function hasEffectiveAgentReview() {
   return EFFECTIVE_AGENT_STATUSES.has(state.agentReview?.status);
-}
-
-function reviewerUnavailableState(error, base = state.agentReview) {
-  return {
-    status: 'unavailable',
-    provider: base?.provider || null,
-    model: base?.model || null,
-    threshold: base?.threshold ?? 0.8,
-    startedAt: base?.startedAt || null,
-    completedAt: base?.completedAt || null,
-    summary: base?.summary || '',
-    results: Array.isArray(base?.results) ? base.results : [],
-    error: { code: 'reviewer-request-failed', message: error.message }
-  };
 }
 
 function clearReport() {
@@ -163,35 +167,51 @@ function syncAgentPolling() {
   }, 1000);
 }
 
-function reviewerModeLabel(review) {
-  if (!review || review.status === 'not-configured') return 'Local review mode';
-  const provider = review.provider || 'Remote reviewer';
-  const model = review.model || 'configured model';
-  return `${provider} / ${model}`;
+function reviewerModeLabel(review = state.agentReview) {
+  if (!review) return 'Mode unknown';
+  if (review.status === 'not-configured') return 'Local review mode';
+  const provider = review.provider || 'Configured reviewer';
+  return review.model ? `${provider} / ${review.model}` : provider;
 }
 
-function reviewerDisclosure(review) {
-  if (!review || review.status === 'not-configured') {
+function reviewerDisclosure(review = state.agentReview) {
+  if (!review) {
+    return state.reviewerSyncPending
+      ? 'Checking reviewer status. No remote agent request has been initiated.'
+      : 'Reviewer status is unavailable. No remote agent request has been initiated.';
+  }
+  if (review.status === 'not-configured') {
     return 'Local mode keeps the prompt and evidence on this machine.';
   }
   return `Remote agent mode sends the prompt and linked excerpts to ${review.provider || 'your configured reviewer'}${review.model ? ` (${review.model})` : ''}.`;
 }
 
-function reviewerStatusMessage(review) {
-  if (!review) return 'Loading reviewer state…';
+function reviewerStatusMessage(review = state.agentReview) {
+  if (!review) {
+    if (state.reviewerSyncPending) return 'Loading reviewer state…';
+    const base = 'Reviewer status unavailable.';
+    return state.reviewerSyncError?.message ? `${base} ${state.reviewerSyncError.message}` : base;
+  }
   const base = REVIEW_STATUS_LABELS[review.status] || 'Reviewer state unavailable.';
-  return review?.error?.message ? `${base} ${review.error.message}` : base;
+  const detail = state.reviewerSyncError?.message || review?.error?.message;
+  return detail ? `${base} ${detail}` : base;
 }
 
-function reviewerStatusTone(review) {
-  if (!review || review.status === 'not-configured') return 'success';
-  if (review.status === 'approved') return 'success';
-  if (review.status === 'failed' || review.status === 'unavailable') return 'error';
+function reviewerStatusTone(review = state.agentReview) {
+  if (!review) return state.reviewerSyncError ? 'error' : 'neutral';
+  if (state.reviewerSyncError) return 'error';
+  if (review.status === 'not-configured' || review.status === 'approved') return 'success';
+  if (review.status === 'failed') return 'error';
   return 'neutral';
 }
 
 function syncAppStatusWithReviewer(review = state.agentReview) {
-  if (!review || review.status === 'not-configured') {
+  if (state.sessionLoadFailed) return;
+  if (!review) {
+    setStatus(reviewerStatusMessage(review), reviewerStatusTone(review));
+    return;
+  }
+  if (review.status === 'not-configured') {
     setStatus('Review session ready', 'success');
     return;
   }
@@ -199,7 +219,7 @@ function syncAppStatusWithReviewer(review = state.agentReview) {
 }
 
 function reportSubmissionLocked() {
-  return isAgentMode() && !hasEffectiveAgentReview();
+  return reviewerModeUnknown() || (isAgentMode() && !hasEffectiveAgentReview());
 }
 
 function setQuestionControls({ disabled, selectedDecision = null, answer = '', error = '', placeholder = 'Describe the behavior you actually intended…' }) {
@@ -241,6 +261,7 @@ function setAgentAudit(result, reviewStatus) {
 
 function effectiveReviewedCount() {
   if (!state.session) return 0;
+  if (reviewerModeUnknown()) return 0;
   if (!isAgentMode()) return state.responses.size;
   if (!hasEffectiveAgentReview()) return 0;
   const byId = new Map((state.agentReview?.results || []).map(result => [result.questionId, result]));
@@ -254,26 +275,24 @@ function effectiveReviewedCount() {
 }
 
 async function loadApp() {
+  state.sessionLoadFailed = false;
+  state.reviewerSyncPending = true;
+  state.reviewerSyncError = null;
+  const reviewerRequest = fetchAgentReview();
+
   try {
     const sessionResponse = await fetch('/api/session', { headers: { accept: 'application/json' } });
     if (!sessionResponse.ok) throw new Error(`Session request failed (${sessionResponse.status})`);
     state.session = await sessionResponse.json();
     elements['prompt-content'].textContent = state.session.prompt;
-
-    try {
-      const reviewResponse = await fetch('/api/agent-review', { headers: { accept: 'application/json' } });
-      if (!reviewResponse.ok) throw new Error(`Reviewer request failed (${reviewResponse.status})`);
-      state.agentReview = await reviewResponse.json();
-    } catch (error) {
-      state.agentReview = reviewerUnavailableState(error);
-    }
-
     restoreResponses();
     reconcileAuthoritativeResponses();
     renderAll();
     syncAgentPolling();
     syncAppStatusWithReviewer();
+    await reviewerRequest;
   } catch (error) {
+    state.sessionLoadFailed = true;
     clearAgentPolling();
     setStatus(error.message, 'error');
     elements['question-title'].textContent = 'The local session could not be loaded.';
@@ -282,39 +301,44 @@ async function loadApp() {
 }
 
 async function fetchAgentReview() {
+  const runGeneration = state.agentRunGeneration;
+  state.reviewerSyncPending = true;
+  state.reviewerSyncError = null;
+  if (!state.sessionLoadFailed) {
+    renderAll();
+    syncAppStatusWithReviewer();
+  }
   try {
     const response = await fetch('/api/agent-review', { headers: { accept: 'application/json' } });
     if (!response.ok) throw new Error(`Reviewer request failed (${response.status})`);
-    state.agentReview = await response.json();
+    const review = await response.json();
+    if (runGeneration !== state.agentRunGeneration) return;
+    state.agentReview = review;
+    state.reviewerSyncPending = false;
+    state.reviewerSyncError = null;
     reconcileAuthoritativeResponses();
+    if (state.sessionLoadFailed) return;
+    renderAll();
+    syncAgentPolling();
+    syncAppStatusWithReviewer(review);
+  } catch (error) {
+    if (runGeneration !== state.agentRunGeneration) return;
+    state.reviewerSyncPending = false;
+    state.reviewerSyncError = { code: 'reviewer-sync-failed', message: error.message };
+    if (state.sessionLoadFailed) return;
     renderAll();
     syncAgentPolling();
     syncAppStatusWithReviewer();
-  } catch (error) {
-    if (state.agentReview?.status === 'running') {
-      state.agentReview = {
-        ...state.agentReview,
-        error: { code: 'reviewer-sync-failed', message: error.message }
-      };
-      renderAll();
-      syncAgentPolling();
-    } else if (isAgentMode()) {
-      state.agentReview = reviewerUnavailableState(error);
-      renderAll();
-    }
-    setStatus(error.message, 'error');
   }
 }
 
 async function runAgentReview() {
-  if (state.agentReview?.status === 'unavailable') {
-    await fetchAgentReview();
-    return;
-  }
-  if (!isAgentMode() || state.agentReview.status === 'running') return;
+  if (reviewerModeUnknown() || !isAgentMode() || state.agentReview.status === 'running') return;
   clearAgentPolling();
   const runGeneration = state.agentRunGeneration + 1;
   state.agentRunGeneration = runGeneration;
+  state.reviewerSyncPending = false;
+  state.reviewerSyncError = null;
   state.agentReview = {
     ...state.agentReview,
     status: 'running',
@@ -339,6 +363,8 @@ async function runAgentReview() {
       return;
     }
     state.agentReview = payload;
+    state.reviewerSyncPending = false;
+    state.reviewerSyncError = null;
     reconcileAuthoritativeResponses();
     renderAll();
     syncAgentPolling();
@@ -373,6 +399,11 @@ function renderAll() {
 }
 
 function renderPrivacy() {
+  if (reviewerModeUnknown()) {
+    setBadge('Mode unknown');
+    elements['privacy-copy'].textContent = state.reviewerSyncPending ? LOADING_PRIVACY_COPY : UNKNOWN_PRIVACY_COPY;
+    return;
+  }
   if (isAgentMode()) {
     setBadge('Remote agent', true);
     elements['privacy-copy'].textContent = REMOTE_PRIVACY_COPY;
@@ -384,7 +415,7 @@ function renderPrivacy() {
 
 function renderReviewer() {
   const review = state.agentReview;
-  if (!review || review.status === 'not-configured') {
+  if (review?.status === 'not-configured') {
     elements['reviewer-panel'].hidden = true;
     return;
   }
@@ -392,15 +423,20 @@ function renderReviewer() {
   elements['reviewer-mode'].textContent = reviewerModeLabel(review);
   elements['reviewer-disclosure'].textContent = reviewerDisclosure(review);
   elements['reviewer-status'].textContent = reviewerStatusMessage(review);
-  elements['reviewer-status'].dataset.state = review.status || 'ready';
+  elements['reviewer-status'].dataset.state = reviewerSyncState(review);
+  if (!review) {
+    elements['reviewer-run-button'].disabled = state.reviewerSyncPending;
+    elements['reviewer-run-button'].textContent = state.reviewerSyncPending
+      ? 'Loading reviewer status…'
+      : 'Retry reviewer status';
+    return;
+  }
   elements['reviewer-run-button'].disabled = review.status === 'running';
   elements['reviewer-run-button'].textContent = review.status === 'running'
     ? 'Reviewing…'
-    : review.status === 'unavailable'
-      ? 'Retry reviewer status'
-      : (review.completedAt || review.status === 'failed' || review.status === 'needs-human' || review.status === 'approved')
-        ? 'Re-run agent review'
-        : 'Run agent review';
+    : (review.completedAt || review.status === 'failed' || review.status === 'needs-human' || review.status === 'approved')
+      ? 'Re-run agent review'
+      : 'Run agent review';
 }
 
 function renderStats() {
@@ -564,7 +600,17 @@ function renderQuestion() {
     }
   }
 
-  if (!isAgentMode()) {
+  if (reviewerModeUnknown()) {
+    setAgentAudit(null, reviewStatus);
+    setQuestionControls({
+      disabled: true,
+      selectedDecision: response?.decision || null,
+      answer: response?.answer || '',
+      placeholder: state.reviewerSyncPending
+        ? 'Checking reviewer status before answering questions.'
+        : 'Retry reviewer status before answering questions.'
+    });
+  } else if (!isAgentMode()) {
     setAgentAudit(null, reviewStatus);
     setQuestionControls({
       disabled: false,
@@ -589,15 +635,13 @@ function renderQuestion() {
     } else {
       setQuestionControls({
         disabled: true,
-        selectedDecision: null,
-        answer: '',
+        selectedDecision: response?.decision || null,
+        answer: response?.answer || '',
         placeholder: reviewStatus === 'running'
           ? 'Reviewing…'
           : reviewStatus === 'failed'
             ? 'Re-run the agent review before answering questions.'
-            : reviewStatus === 'unavailable'
-              ? 'Retry reviewer status before answering questions.'
-              : 'Run the agent review to unlock human follow-up for escalated questions.'
+            : 'Run the agent review to unlock human follow-up for escalated questions.'
       });
     }
   }
@@ -609,7 +653,7 @@ function renderQuestion() {
 
 function saveDecision(decision) {
   const question = state.session?.questions[state.questionIndex];
-  if (!question) return;
+  if (!question || reviewerModeUnknown()) return;
   if (isAgentMode()) {
     const result = agentResult(question.id);
     if (!result || result.status !== 'escalated' || state.agentReview.status !== 'needs-human') return;
@@ -711,7 +755,13 @@ function bindEvents() {
   elements['previous-button'].addEventListener('click', () => moveQuestion(-1));
   elements['next-button'].addEventListener('click', () => moveQuestion(1));
   elements['finish-button'].addEventListener('click', finishReview);
-  elements['reviewer-run-button'].addEventListener('click', runAgentReview);
+  elements['reviewer-run-button'].addEventListener('click', () => {
+    if (reviewerModeUnknown()) {
+      fetchAgentReview();
+      return;
+    }
+    runAgentReview();
+  });
   elements['copy-report'].addEventListener('click', copyReport);
   elements['download-report'].addEventListener('click', downloadReport);
 }
