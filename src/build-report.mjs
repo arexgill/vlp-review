@@ -194,6 +194,29 @@ function renderAuditItem(session, question, result, humanResolution) {
   return lines.join('\n');
 }
 
+function renderNonEffectiveAuditItem(session, question, result) {
+  const evidence = agentEvidenceForDocUnitIds(session, result?.evidenceDocUnitIds || []);
+  const lines = [
+    `### ${cleanInline(question.title)} (${cleanInline(question.id)})`,
+    '',
+    `- Policy status: ${cleanInline(result?.status) || 'unknown'}`,
+    `- Question: ${cleanInline(question.ask)}`,
+    `- Proposed decision: ${cleanInline(result?.proposedDecision) || 'None'}`,
+    '- Effective decision: Not applicable',
+    `- Confidence: ${formatPercent(result?.confidence)}`,
+    `- Intent basis: ${cleanInline(result?.intentBasis) || 'Not available'}`,
+    `- Rationale: ${cleanInline(result?.rationale) || 'None provided.'}`,
+    `- Escalation reasons: ${(result?.escalationReasons || []).length ? result.escalationReasons.map(cleanInline).join(', ') : 'None'}`,
+    `- Evidence: ${evidence.length ? evidence.join('; ') : 'No direct source line was linked.'}`
+  ];
+
+  if (clean(result?.answer)) {
+    lines.push(`- Raw answer: ${cleanInline(result.answer)}`);
+  }
+
+  return lines.join('\n');
+}
+
 function renderMissingResultUnresolvedQuestion(question) {
   return [
     `### ${cleanInline(question.title)} (${cleanInline(question.id)})`,
@@ -413,7 +436,7 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
     }
 
     if (!canUseEffectiveResults) {
-      auditItems.push(renderAuditItem(session, question, result, humanResolution));
+      auditItems.push(renderNonEffectiveAuditItem(session, question, result));
       continue;
     }
 
@@ -456,12 +479,15 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
 
   const escalatedCount = results.filter(result => clean(result?.status) === 'escalated').length;
   const finalStatus = finalValidationStatus(agentReview, unresolved.length, escalatedCount);
-  const repairInstructions = buildAgentRepairInstructions(session, questions, effectiveResponses, agentReview, finalStatus, escalatedCount);
+  const canRenderEffectiveSections = canUseEffectiveResults;
+  const repairInstructions = canRenderEffectiveSections
+    ? buildAgentRepairInstructions(session, questions, effectiveResponses, agentReview, finalStatus, escalatedCount)
+    : null;
   const zeroQuestionNote = clean(agentReview?.status) === 'approved' && questions.length === 0
     ? '- Review note: Agent approved: no targeted mismatches. Heuristics can miss semantic defects; this result is not a proof of correctness.'
     : null;
 
-  return [
+  const report = [
     '# VLP Review Report',
     '',
     `Session: ${cleanInline(session.id)}`,
@@ -492,25 +518,43 @@ function buildAgentReport(session, rawResponses = [], agentReview = {}) {
     agentReview?.error ? `- Reviewer error: ${cleanInline(agentReview.error.message) || 'Unknown error'}` : '- Reviewer error: None',
     zeroQuestionNote,
     '',
-    auditItems.length ? auditItems.join('\n\n') : 'No agent review results were recorded.',
-    '',
-    renderSection('Corrected Intent', corrected),
-    '',
-    renderSection('Accepted Generated Behavior', accepted),
-    '',
-    renderSection('Marked Irrelevant', irrelevant),
+    auditItems.length ? auditItems.join('\n\n') : 'No agent review results were recorded.'
+  ];
+
+  if (canRenderEffectiveSections) {
+    report.push(
+      '',
+      renderSection('Corrected Intent', corrected),
+      '',
+      renderSection('Accepted Generated Behavior', accepted),
+      '',
+      renderSection('Marked Irrelevant', irrelevant),
+      '',
+      renderSection('Unresolved Questions', unresolved),
+      '',
+      '## Parse Diagnostics',
+      '',
+      diagnostics.length ? diagnostics.join('\n') : 'None',
+      '',
+      '## Repair Instructions for Coding Agent',
+      '',
+      repairInstructions,
+      ''
+    );
+    return report.join('\n');
+  }
+
+  report.push(
     '',
     renderSection('Unresolved Questions', unresolved),
     '',
     '## Parse Diagnostics',
     '',
     diagnostics.length ? diagnostics.join('\n') : 'None',
-    '',
-    '## Repair Instructions for Coding Agent',
-    '',
-    repairInstructions,
     ''
-  ].join('\n');
+  );
+
+  return report.join('\n');
 }
 
 export function buildReport(session, rawResponses = [], { agentReview = null } = {}) {

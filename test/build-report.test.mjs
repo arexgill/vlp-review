@@ -366,6 +366,24 @@ test('reports reviewer failures without claiming approval', () => {
   assert.doesNotMatch(markdown, /Completed with human resolution/);
 });
 
+test('does not treat ready review results as effective decisions', () => {
+  const readyReview = structuredClone(agentReview);
+  readyReview.status = 'ready';
+
+  const markdown = buildReport(session, [], { agentReview: readyReview });
+
+  assert.match(markdown, /Agent review status: Agent review has not run yet/);
+  assert.match(markdown, /Final validation status: Needs human review/);
+  assert.match(markdown, /Effective decision: Not applicable/);
+  assert.match(markdown, /Proposed decision: correct/);
+  assert.match(markdown, /Rationale: Description is explicit\./);
+  assert.doesNotMatch(markdown, /Human resolution:/);
+  assert.doesNotMatch(markdown, /## Corrected Intent/);
+  assert.doesNotMatch(markdown, /## Accepted Generated Behavior/);
+  assert.doesNotMatch(markdown, /## Marked Irrelevant/);
+  assert.doesNotMatch(markdown, /## Repair Instructions for Coding Agent/);
+});
+
 test('reports when agent review has not run yet', () => {
   const markdown = buildReport(session, [], {
     agentReview: {
@@ -383,6 +401,23 @@ test('reports when agent review has not run yet', () => {
 
   assert.match(markdown, /Agent review status: Agent review has not run yet/);
   assert.match(markdown, /Final validation status: Needs human review/);
+});
+
+test('does not treat failed review results as effective decisions', () => {
+  const failedReview = structuredClone(agentReview);
+  failedReview.status = 'failed';
+
+  const markdown = buildReport(session, [], { agentReview: failedReview });
+
+  assert.match(markdown, /Final validation status: Reviewer failed/);
+  assert.match(markdown, /Effective decision: Not applicable/);
+  assert.match(markdown, /Proposed decision: correct/);
+  assert.match(markdown, /Rationale: Description is explicit\./);
+  assert.doesNotMatch(markdown, /Human resolution:/);
+  assert.doesNotMatch(markdown, /## Corrected Intent/);
+  assert.doesNotMatch(markdown, /## Accepted Generated Behavior/);
+  assert.doesNotMatch(markdown, /## Marked Irrelevant/);
+  assert.doesNotMatch(markdown, /## Repair Instructions for Coding Agent/);
 });
 
 test('reports zero-question agent-approved sessions with no targeted mismatches', () => {
