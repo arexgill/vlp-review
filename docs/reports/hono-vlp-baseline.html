@@ -8,8 +8,8 @@
     :root {
       --color-navy: #001f3f;
       --color-off-white: #f8f9fa;
-      --color-teal: #17a2b8;
-      --color-coral: #ff7f50;
+      --color-teal: #006677;
+      --color-coral: #b33939;
       --color-text: #333333;
       --color-card-bg: #ffffff;
       --color-border: #dee2e6;
@@ -147,6 +147,7 @@
   </style>
 </head>
 <body>
+  <main aria-label="Report Content">
 
   <header class="hero">
     <h1>Hono Baseline VLP Analysis Report</h1>
@@ -154,7 +155,8 @@
     <p>Run date: 2026-07-29</p>
   </header>
 
-  <h2>Executive Summary</h2>
+  <section aria-labelledby="exec-heading">
+    <h2 id="exec-heading">Executive Summary</h2>
   <div class="grid">
     <div class="card">
       <div class="metric-value">186</div>
@@ -174,7 +176,10 @@
     </div>
   </div>
 
-  <h2>Decision Distribution</h2>
+  </section>
+
+  <section aria-labelledby="decision-heading">
+    <h2 id="decision-heading">Decision Distribution</h2>
   <div class="decision-distribution">
     <div class="decision-bar">
       <strong>Accept behavior:</strong> 17
@@ -190,15 +195,39 @@
     </div>
   </div>
 
-  <h2>Learning Summary & Outcome</h2>
+  </section>
+
+  <section aria-labelledby="learning-heading">
+    <h2 id="learning-heading">Learning Summary & Outcome</h2>
   <div class="card" style="margin-top: 2rem;">
     <p>The baseline met the four success criteria by successfully parsing the bounded scope, running the VLP engine against public documentation intent, capturing questions, and completing the human review. No scoped Hono PR or contract-diff follow-up is recommended as all questions represent acceptable framework behavior or expected heuristic noise.</p>
   </div>
 
-  <h2>Methodology</h2>
+
+  <section aria-labelledby="definitions-heading">
+    <h2 id="definitions-heading">Definitions</h2>
+    <dl>
+      <dt><strong>VLP</strong></dt>
+      <dd>The heuristic engine that parses source code and compares it against expected requirements to identify discrepancies.</dd>
+      <dt><strong>Accept behavior</strong></dt>
+      <dd>A reviewer decision indicating the code's current behavior is acceptable and requires no changes.</dd>
+      <dt><strong>Correct intent</strong></dt>
+      <dd>A reviewer decision indicating the documented requirements must be updated to align with the correct code.</dd>
+      <dt><strong>Intent surrogate</strong></dt>
+      <dd>An existing document, such as public documentation, used as a stand-in for a formal technical specification.</dd>
+      <dt><strong>Contract diff</strong></dt>
+      <dd>A proposed patch to update formal requirements or specifications based on analysis findings.</dd>
+    </dl>
+  </section>
+
+  <section aria-labelledby="methodology-heading">
+    <h2 id="methodology-heading">Methodology</h2>
   <p>Public documentation was used as an intent surrogate. The framework source was parsed but not executed. This analysis verifies traceability between documented requirements and codebase structures, and the result is not a correctness or security verdict. All non-test supported source under Hono <code>src/</code> is analyzed through a disposable input copy, while tests and source outside <code>src/</code> are excluded. This exercises core route matching, middleware composition, and request/response code but is not whole-repository coverage.</p>
-  
-  <h3>Canonical Links</h3>
+
+  </section>
+
+  <section aria-labelledby="canonical-heading">
+    <h3 id="canonical-heading">Canonical Links</h3>
   <ul>
     <li><a href="https://hono.dev/docs/api/routing">Routing</a></li>
     <li><a href="https://hono.dev/docs/api/middleware">Middleware</a></li>
@@ -206,7 +235,10 @@
     <li><a href="https://hono.dev/docs/api/exception">Error Handling</a></li>
   </ul>
 
-  <h2>Representative Evidence</h2>
+  </section>
+
+  <section aria-labelledby="evidence-heading">
+    <h2 id="evidence-heading">Representative Evidence</h2>
   <div class="grid">
     <div class="card">
       <h3>Heuristic extraction of meta-prompt vocabulary</h3>
@@ -224,16 +256,25 @@
     </div>
   </div>
 
-  <h2>Limitations & Heuristic Noise</h2>
+  </section>
+
+  <section aria-labelledby="limitations-heading">
+    <h2 id="limitations-heading">Limitations & Heuristic Noise</h2>
   <ul>
     <li><strong>Unversioned documentation:</strong> Canonical documentation URLs used in this analysis are unversioned relative to the pinned Hono codebase SHA, meaning future documentation updates could drift from the analyzed source state.</li>
     <li><strong>Meta-prompt extraction:</strong> The heuristic engine frequently extracted words from the surrogate's introductory and boundary text (e.g., "core", "intent", "scope") because they did not map to framework source. This noise does not transfer to framework source.</li>
     <li><strong>Raw string / value heuristics:</strong> Many implementation details like alg (JWT algorithm), websocket, or content-type headers were flagged because they are not explicitly enumerated in the surrogate intent.</li>
+    <li><strong>Scope conflict:</strong> All non-test <code>src/</code> files included platform adapter source, while adapter-specific behavior was outside the intent surrogate; adapter evidence demonstrates heuristic trace/noise, not validation of adapter contracts.</li>
     <li><strong>Known blind spots:</strong> The analysis is limited by the lack of whole repository context, static TypeScript type semantics, undocumented framework conventions, and the inherent limitations of using a documentation surrogate instead of an exhaustive technical specification.</li>
   </ul>
 
-  <h2>Recommendation</h2>
+  </section>
+
+  <section aria-labelledby="recommendation-heading">
+    <h2 id="recommendation-heading">Recommendation</h2>
   <p>No scoped Hono PR or contract-diff follow-up is recommended as all questions represent acceptable framework behavior or expected heuristic noise.</p>
 
+</section>
+  </main>
 </body>
 </html>
