@@ -6,7 +6,41 @@ import { extractFastApiContracts } from '../src/python-analyzer.mjs';
 
 const __dirname = path.resolve();
 
+import { EventEmitter } from 'node:events';
+
 test('extractFastApiContracts', async (t) => {
+  await t.test('invokes only the resolved repository helper with source via stdin', async () => {
+    let spawnArgs = null;
+    let stdinData = '';
+
+    const fakeChild = new EventEmitter();
+    fakeChild.stdout = new EventEmitter();
+    fakeChild.stderr = new EventEmitter();
+    fakeChild.stdin = {
+      write: (data) => { stdinData += data; },
+      end: () => {
+        fakeChild.stdout.emit('data', JSON.stringify({ units: [], routes: [], diagnostics: [] }));
+        fakeChild.emit('close', 0);
+      }
+    };
+
+    const fakeSpawn = (command, args) => {
+      spawnArgs = { command, args };
+      return fakeChild;
+    };
+
+    const files = [{ path: 'test.py', source: 'def test(): pass' }];
+    await extractFastApiContracts({ files }, fakeSpawn);
+
+    assert.equal(spawnArgs.command, 'python3');
+    assert.equal(spawnArgs.args.length, 1);
+    assert.ok(spawnArgs.args[0].endsWith('scripts/extract-fastapi.py'), 'Must run exactly the repository helper script');
+
+    // Check that source is passed exactly via stdin
+    const parsedStdin = JSON.parse(stdinData);
+    assert.deepEqual(parsedStdin, { files });
+  });
+
   await t.test('extracts route info and exception handlers from valid python file', async () => {
     const files = [
       {
@@ -24,11 +58,11 @@ test('extractFastApiContracts', async (t) => {
     ];
 
     const result = await extractFastApiContracts({ files });
-    
+
     // Valid file tests
     const validRoutes = result.routes.filter(r => r.file === 'app/main.py');
     assert.equal(validRoutes.length, 2); // 1 route, 1 exception handler
-    
+
     const itemRoute = validRoutes.find(r => r.path === '/items/{item_id}');
     assert.ok(itemRoute);
     assert.equal(itemRoute.file, 'app/main.py');
@@ -42,7 +76,7 @@ test('extractFastApiContracts', async (t) => {
     const excRoute = validRoutes.find(r => r.exceptionHandler);
     assert.ok(excRoute);
     assert.equal(excRoute.exceptionHandler, '404');
-    
+
     // Invalid file tests
     assert.equal(result.diagnostics.length, 1);
     const diag = result.diagnostics[0];

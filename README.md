@@ -76,8 +76,8 @@ Responses persist in browser `localStorage` under the session fingerprint, so a 
 - The HTTP server binds only to `127.0.0.1`.
 - Prompt, source, documentation, and responses are never sent to a remote service.
 - No LLM API key is required.
-- **Runtime execution boundary:** For explicit opt-ins using `--runtime fastapi`, source is never evaluated directly on the host machine. Instead, a prerequisite Docker sandbox is required. Endpoint logic is never executed. Only safe OpenAPI metadata is extracted to verify static routes.
-- Source is parsed as text and is never imported, executed, or evaluated outside the sandbox.
+- **Runtime execution boundary:** For explicit opt-ins using `--runtime fastapi`, target application logic is never executed on the host machine. Instead, a prerequisite Docker sandbox is required. Endpoint logic is never executed. Only safe OpenAPI metadata is extracted to verify static routes.
+- Source is parsed as text by a repository-owned script and is never imported, executed, or evaluated outside the sandbox. Host `python3` is only used to execute the repository's AST extraction script using standard libraries `ast`, `json`, and `sys`.
 - Static serving uses an allowlist; project files cannot be fetched through the server.
 - API request bodies are limited to 256 KiB.
 - Responses use a restrictive Content Security Policy and `no-store` caching.

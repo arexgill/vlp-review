@@ -26,7 +26,7 @@ vlp-review \
 
 ## Static Python analysis
 
-Add `.py` discovery and parse Python through a dedicated adapter without importing or executing project code. Extract evidence for:
+Add `.py` discovery and parse Python through a dedicated repository-owned adapter script. The host `python3` executes only this script (using standard libraries `ast`, `json`, and `sys`) without importing, evaluating, or executing project code. The script reads source over stdin. Extract evidence for:
 
 - FastAPI application and router declarations;
 - route decorators, HTTP methods, and path templates;

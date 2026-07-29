@@ -4,10 +4,10 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export async function extractFastApiContracts(input) {
+export async function extractFastApiContracts(input, spawnFn = spawn) {
   return new Promise((resolve, reject) => {
     const pythonScript = path.join(__dirname, '..', 'scripts', 'extract-fastapi.py');
-    const child = spawn('python3', [pythonScript]);
+    const child = spawnFn('python3', [pythonScript]);
 
     let stdout = '';
     let stderr = '';

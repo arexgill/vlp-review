@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - `--runtime fastapi` and `--fastapi-app module:attribute` are both required for runtime execution.
-- No Python project code is imported, executed, or installed on the host.
+- No Python project code is imported, executed, or installed on the host. Host `python3` may run only the repository-owned `scripts/extract-fastapi.py` helper which receives source over stdin and uses standard libraries `ast/json/sys` without importing the target app.
 - Docker source mount is read-only; no host credentials, home, Docker socket, writable host paths, or external runtime network.
 - Runtime output is limited to OpenAPI JSON and safe diagnostics; do not request discovered endpoints.
 - Docker failures do not prevent static Python analysis.

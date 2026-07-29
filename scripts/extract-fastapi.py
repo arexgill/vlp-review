@@ -4,7 +4,7 @@ import sys
 
 def extract_from_ast(files_data):
     routers = {}       # var_name -> prefix
-    compositions = {}  # router_var_name -> [prefix1, prefix2] (from include_router)
+    inclusions = {}    # child_var_name -> list of (parent_var_name, include_prefix)
 
     # 1. Global pass for routers and include_router
     for f in files_data:
@@ -30,11 +30,15 @@ def extract_from_ast(files_data):
                             routers[target.id] = prefix
 
             elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-                # app.include_router(items_router, prefix="/api/v1")
+                # api_router.include_router(items_router, prefix="/v1")
                 call = node.value
                 if isinstance(call.func, ast.Attribute) and call.func.attr == 'include_router':
-                    if call.args and isinstance(call.args[0], ast.Name):
-                        router_name = call.args[0].id
+                    parent_name = None
+                    if isinstance(call.func.value, ast.Name):
+                        parent_name = call.func.value.id
+
+                    if parent_name and call.args and isinstance(call.args[0], ast.Name):
+                        child_name = call.args[0].id
                         prefix = ""
                         for kw in call.keywords:
                             if kw.arg == 'prefix':
@@ -42,9 +46,38 @@ def extract_from_ast(files_data):
                                     prefix = kw.value.s
                                 elif hasattr(ast, 'Constant') and isinstance(kw.value, getattr(ast, 'Constant')):
                                     prefix = kw.value.value
-                        if router_name not in compositions:
-                            compositions[router_name] = []
-                        compositions[router_name].append(prefix)
+                        if child_name not in inclusions:
+                            inclusions[child_name] = []
+                        inclusions[child_name].append((parent_name, prefix))
+
+    # Helper to compute all composite prefixes for a router using cycle protection
+    def get_composite_prefixes(router_name, visited=None):
+        if visited is None:
+            visited = set()
+        if not router_name or router_name in visited:
+            return [""]
+
+        visited.add(router_name)
+        router_prefix = routers.get(router_name, "")
+
+        parents = inclusions.get(router_name, [])
+        if not parents:
+            visited.remove(router_name)
+            return [router_prefix]
+
+        result = []
+        for parent_name, include_prefix in parents:
+            parent_prefixes = get_composite_prefixes(parent_name, visited)
+            for pp in parent_prefixes:
+                result.append(pp + include_prefix + router_prefix)
+
+        visited.remove(router_name)
+
+        # In case a router is used both as top-level and included,
+        # one could optionally include `router_prefix` itself if it's attached to an app somewhere else,
+        # but FastApi composition generally expects the inclusive paths.
+        # If result is empty because of cycles (though handled by return [""]), we return router_prefix.
+        return result if result else [router_prefix]
 
     # 2. Extract routes and docs
     all_units = []
@@ -92,11 +125,10 @@ def extract_from_ast(files_data):
                                     route_path = decorator.args[0].s
 
                             # Resolve prefixes
-                            router_prefix = routers.get(router_name, "")
-                            comp_prefixes = compositions.get(router_name, [""])
+                            comp_prefixes = get_composite_prefixes(router_name)
 
                             for comp_prefix in comp_prefixes:
-                                full_path = comp_prefix + router_prefix + route_path
+                                full_path = comp_prefix + route_path
                                 # Cleanup double slashes
                                 full_path = '/' + '/'.join(x for x in full_path.split('/') if x)
                                 if not full_path:
