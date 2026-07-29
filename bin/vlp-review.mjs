@@ -19,7 +19,7 @@ async function main() {
       promptPath: options.promptPath,
       codePath: options.codePath
     });
-    const session = createSession(input);
+    const session = await createSession(input);
     const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
     const server = createVlpServer({ session, publicDir });
     const address = await listen(server, { port: options.port });

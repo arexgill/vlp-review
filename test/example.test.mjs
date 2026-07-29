@@ -14,7 +14,7 @@ test('example produces targeted field, value, and error questions', async () => 
     promptPath: path.join(exampleRoot, 'prompt.md'),
     codePath: path.join(exampleRoot, 'generated-code.js')
   });
-  const session = createSession(input);
+  const session = await createSession(input);
   const questionText = session.questions.map(question => `${question.ask} ${question.reason}`).join('\n');
 
   assert.equal(session.sources.length, 1);

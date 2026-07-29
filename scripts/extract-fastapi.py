@@ -45,6 +45,9 @@ def parse_fastapi(source_code, file_path):
                             
                             status_code = None
                             response_model = None
+                            api_route_methods = None
+                            decorator_dependencies = []
+
                             for kw in decorator.keywords:
                                 if kw.arg == 'status_code':
                                     if hasattr(ast, 'Constant') and isinstance(kw.value, getattr(ast, 'Constant')):
@@ -56,9 +59,23 @@ def parse_fastapi(source_code, file_path):
                                         response_model = kw.value.id
                                     elif isinstance(kw.value, ast.Attribute):
                                         response_model = kw.value.attr
+                                elif kw.arg == 'methods':
+                                    if isinstance(kw.value, (ast.List, ast.Tuple, ast.Set)):
+                                        api_route_methods = []
+                                        for elt in kw.value.elts:
+                                            if hasattr(ast, 'Constant') and isinstance(elt, getattr(ast, 'Constant')):
+                                                api_route_methods.append(str(elt.value).upper())
+                                            elif isinstance(elt, ast.Str):
+                                                api_route_methods.append(elt.s.upper())
+                                elif kw.arg == 'dependencies':
+                                    if isinstance(kw.value, (ast.List, ast.Tuple)):
+                                        for elt in kw.value.elts:
+                                            if isinstance(elt, ast.Call) and getattr(elt.func, 'id', None) == 'Depends':
+                                                if elt.args and isinstance(elt.args[0], ast.Name):
+                                                    decorator_dependencies.append(elt.args[0].id)
                             
                             # dependencies from Depends() in signature
-                            dependencies = []
+                            dependencies = decorator_dependencies
                             request_model = None
                             
                             for arg in node.args.args:
@@ -80,7 +97,7 @@ def parse_fastapi(source_code, file_path):
                                 "file": file_path,
                                 "lineStart": node.lineno,
                                 "path": route_path,
-                                "methods": [method.upper()] if method != 'api_route' else None, # Might need to parse methods from kwargs for api_route
+                                "methods": api_route_methods if method == 'api_route' else [method.upper()],
                                 "dependencies": dependencies,
                                 "requestModel": request_model,
                                 "responseModel": response_model,

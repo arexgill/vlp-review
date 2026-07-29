@@ -13,8 +13,8 @@ const source = {
 }`
 };
 
-test('asks a targeted missing-step question with trace evidence', () => {
-  const { docUnits } = analyzeSources([source]);
+test('asks a targeted missing-step question with trace evidence', async () => {
+  const { docUnits } = await analyzeSources([source]);
   const questions = detectMismatches({ prompt, docUnits });
   const question = questions.find(item => item.type === 'missing-step');
   assert.ok(question);
@@ -38,8 +38,8 @@ test('flags an unprompted comparison literal as a value to validate', () => {
   assert.ok(questions.some(item => item.type === 'wrong-value' && item.ask.includes('25')));
 });
 
-test('returns stable, severity-ordered, de-duplicated questions', () => {
-  const { docUnits } = analyzeSources([source]);
+test('returns stable, severity-ordered, de-duplicated questions', async () => {
+  const { docUnits } = await analyzeSources([source]);
   const first = detectMismatches({ prompt, docUnits });
   const second = detectMismatches({ prompt, docUnits });
   assert.deepEqual(first, second);

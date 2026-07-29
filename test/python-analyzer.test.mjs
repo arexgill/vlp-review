@@ -16,6 +16,10 @@ test('extractFastApiContracts', async (t) => {
       {
         path: 'app/invalid.py',
         source: readFileSync(path.join(__dirname, 'test/fixtures/fastapi-basic/app/invalid.py'), 'utf-8')
+      },
+      {
+        path: 'app/api_route.py',
+        source: readFileSync(path.join(__dirname, 'test/fixtures/fastapi-basic/app/api_route.py'), 'utf-8')
       }
     ];
 
@@ -44,5 +48,12 @@ test('extractFastApiContracts', async (t) => {
     const diag = result.diagnostics[0];
     assert.equal(diag.file, 'app/invalid.py');
     assert.ok(diag.message.includes('SyntaxError'));
+
+    // api_route tests
+    const mixedRoute = result.routes.find(r => r.path === '/mixed');
+    assert.ok(mixedRoute);
+    assert.equal(mixedRoute.file, 'app/api_route.py');
+    assert.deepEqual(mixedRoute.methods, ['GET', 'POST']);
+    assert.deepEqual(mixedRoute.dependencies, ['verify_token']);
   });
 });
