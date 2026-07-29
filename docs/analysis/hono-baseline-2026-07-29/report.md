@@ -27,7 +27,7 @@ Public documentation was used as an intent surrogate. The framework source was p
 
 - VLP category: missing behavior
 - Source evidence: `adapter/cloudflare-pages/handler.ts:33`
-- Intent evidence: Context (https://hono.dev/docs/api/context)
+- Intent evidence: `intent.md` preamble and/or Review boundary
 - Reviewer decision: Accept behavior
 - Assessment: The VLP engine extracted meta-prompt words ("core", "intent", "surrogate", "artifact", "summarize", "analyze", "enumerated", "scope") and asked why they were missing from the codebase. This is expected heuristic noise because these words describe the review process and instructions, rather than framework requirements.
 
@@ -41,6 +41,7 @@ Public documentation was used as an intent surrogate. The framework source was p
 
 ## Heuristic noise and limitations
 
+- **Unversioned documentation:** Canonical documentation URLs used in this analysis are unversioned relative to the pinned Hono codebase SHA, meaning future documentation updates could drift from the analyzed source state.
 - **Meta-prompt extraction:** The heuristic engine frequently extracted words from the surrogate's introductory and boundary text (e.g., "core", "intent", "scope") because they did not map to framework source. This noise does not transfer to framework source.
 - **Raw string / value heuristics:** Many implementation details like `alg` (JWT algorithm), `websocket`, or content-type headers were flagged because they are not explicitly enumerated in the surrogate intent.
 - **Known blind spots:** The analysis is limited by the lack of whole repository context, static TypeScript type semantics, undocumented framework conventions, and the inherent limitations of using a documentation surrogate instead of an exhaustive technical specification.
