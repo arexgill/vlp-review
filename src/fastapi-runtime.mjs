@@ -82,7 +82,7 @@ RUN pip install --no-cache-dir -r requirements.txt -t /deps
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') return { openapi: null, diagnostic: { type: 'timeout', message: 'Docker execution timed out' } };
     if (err.code === 'ENOENT') return { openapi: null, diagnostic: { type: 'docker_absence', message: 'Docker is not installed or not in PATH' } };
-    return { openapi: null, diagnostic: { type: 'docker_error', message: err.message } };
+    return { openapi: null, diagnostic: { type: 'docker_error', message: 'Sandbox build rejected dependencies' } };
   }
 
   if (buildResult.overflow) {
@@ -92,7 +92,7 @@ RUN pip install --no-cache-dir -r requirements.txt -t /deps
 
   if (buildResult.exitCode !== 0) {
     clearTimeout(timeoutId);
-    return { openapi: null, diagnostic: { type: 'build_error', message: buildResult.stderr || 'Build failed' } };
+    return { openapi: null, diagnostic: { type: 'build_error', message: 'Sandbox build rejected dependencies' } };
   }
 
   const imageId = buildResult.stdout.trim();
@@ -124,7 +124,7 @@ RUN pip install --no-cache-dir -r requirements.txt -t /deps
     if (err.code === 'ENOENT') {
       return { openapi: null, diagnostic: { type: 'docker_absence', message: 'Docker is not installed or not in PATH' } };
     }
-    return { openapi: null, diagnostic: { type: 'docker_error', message: err.message } };
+    return { openapi: null, diagnostic: { type: 'docker_error', message: 'Docker subprocess failed' } };
   } finally {
     clearTimeout(timeoutId);
     runDocker(['rmi', '-f', imageId], { signal: AbortSignal.timeout(5000) }).catch(() => {});
@@ -155,5 +155,28 @@ RUN pip install --no-cache-dir -r requirements.txt -t /deps
     return { openapi: null, diagnostic: { type: 'invalid_openapi', message: 'Missing paths object in OpenAPI' } };
   }
 
-  return { openapi: parsed, diagnostic: null };
+  const sanitized = { paths: {} };
+  for (const [pathKey, pathObj] of Object.entries(parsed.paths)) {
+    if (!pathObj || typeof pathObj !== 'object') continue;
+    sanitized.paths[pathKey] = {};
+    for (const [method, opObj] of Object.entries(pathObj)) {
+      if (!opObj || typeof opObj !== 'object') continue;
+      const sanitizedOp = { responses: {} };
+      if (opObj.responses && typeof opObj.responses === 'object') {
+        for (const [status, respObj] of Object.entries(opObj.responses)) {
+          sanitizedOp.responses[status] = {};
+          if (respObj && respObj.content && respObj.content['application/json'] && respObj.content['application/json'].schema) {
+            const schema = respObj.content['application/json'].schema;
+            const ref = schema.$ref || (schema.items && schema.items.$ref);
+            if (ref) {
+              sanitizedOp.responses[status] = { schemaRef: ref };
+            }
+          }
+        }
+      }
+      sanitized.paths[pathKey][method] = sanitizedOp;
+    }
+  }
+
+  return { openapi: sanitized, diagnostic: null };
 }

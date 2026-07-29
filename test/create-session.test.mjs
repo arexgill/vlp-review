@@ -71,8 +71,8 @@ def get_items(): pass
 
   const drift = session.questions.find(q => q.type === 'method-drift');
   assert.ok(drift);
-  assert.equal(drift.promptEvidence, 'app.py:4');
-  assert.equal(drift.docUnitIds[0], 'openapi:/items');
+  assert.deepEqual(drift.sourceEvidence, { file: 'app.py', lineStart: 4, target: '/items' });
+  assert.equal(drift.runtimeEvidence.type, 'openapi-drift');
 });
 
 test('handles collectFastApiOpenApi diagnostic injection securely', async () => {

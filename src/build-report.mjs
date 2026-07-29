@@ -109,7 +109,7 @@ export function buildReport(session, rawResponses = []) {
     'After editing, run the project tests and report any behavior that could not be implemented.'
   ].join('\n');
 
-  const executionBoundary = [
+  const executionBoundary = session.fastapiApp ? [
     '## Execution Boundary',
     '',
     session.runtimeDiagnostic
@@ -117,15 +117,14 @@ export function buildReport(session, rawResponses = []) {
       : `- **Runtime Integration:** Safe OpenAPI payload collected locally via ${clean(session.fastapiApp || 'test injection')}.`,
     '- **Safety Limits:** Endpoint execution is strictly omitted. Only schema metadata and documentation traces are extracted.',
     '- **Execution Opt-in:** Runtime assessment requires an explicit `--runtime fastapi` and `--fastapi-app <target>` flag.'
-  ].join('\n');
+  ].join('\n') : null;
 
   return [
     '# VLP Review Report',
     '',
     `Session: ${clean(session.id)}`,
     '',
-    executionBoundary,
-    '',
+    ...(executionBoundary ? [executionBoundary, ''] : []),
     '## Review Summary',
     '',
     `- Targeted questions: ${questions.length}`,

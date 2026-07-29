@@ -10,7 +10,7 @@ const ids = [
   'app-status', 'session-stats', 'prompt-content', 'source-select', 'source-code',
   'doc-list', 'diagnostic-list', 'review-progress', 'progress-fill', 'question-card',
   'question-title', 'question-ask', 'question-type', 'question-severity', 'question-reason',
-  'prompt-evidence', 'code-evidence', 'correction-text', 'response-error',
+  'prompt-evidence-label', 'prompt-evidence', 'code-evidence-label', 'code-evidence', 'correction-text', 'response-error',
   'accept-button', 'correct-button', 'irrelevant-button', 'previous-button',
   'next-button', 'finish-button', 'report-panel', 'report-output', 'copy-report',
   'download-report', 'runtime-block', 'runtime-disclosure', 'runtime-list'
@@ -238,22 +238,36 @@ function renderQuestion() {
   elements['question-title'].textContent = question.title;
   elements['question-ask'].textContent = question.ask;
   elements['question-reason'].textContent = question.reason;
-  elements['prompt-evidence'].textContent = question.promptEvidence || 'No direct prompt sentence was linked.';
+
+  if (question.sourceEvidence) {
+    elements['prompt-evidence-label'].textContent = 'Source evidence';
+    elements['prompt-evidence'].textContent = JSON.stringify(question.sourceEvidence, null, 2);
+  } else {
+    elements['prompt-evidence-label'].textContent = 'Prompt trace';
+    elements['prompt-evidence'].textContent = question.promptEvidence || 'No direct prompt sentence was linked.';
+  }
+
   elements['correction-text'].value = response?.answer || '';
 
-  const units = linkedUnits(question);
-  if (units.length === 0) {
-    elements['code-evidence'].append(makeElement('p', 'empty-state', 'No direct source trace linked.'));
+  if (question.runtimeEvidence) {
+    elements['code-evidence-label'].textContent = 'Runtime OpenAPI evidence';
+    elements['code-evidence'].append(makeElement('pre', 'evidence-json', JSON.stringify(question.runtimeEvidence, null, 2)));
   } else {
-    for (const unit of units) {
-      const button = makeElement('button', 'evidence-button');
-      button.type = 'button';
-      button.append(
-        makeElement('span', '', unit.text),
-        makeElement('span', '', `${unit.file}:L${unit.lineStart}`)
-      );
-      button.addEventListener('click', () => showSourceEvidence(unit));
-      elements['code-evidence'].append(button);
+    elements['code-evidence-label'].textContent = 'Code & documentation trace';
+    const units = linkedUnits(question);
+    if (units.length === 0) {
+      elements['code-evidence'].append(makeElement('p', 'empty-state', 'No direct source trace linked.'));
+    } else {
+      for (const unit of units) {
+        const button = makeElement('button', 'evidence-button');
+        button.type = 'button';
+        button.append(
+          makeElement('span', '', unit.text),
+          makeElement('span', '', `${unit.file}:L${unit.lineStart}`)
+        );
+        button.addEventListener('click', () => showSourceEvidence(unit));
+        elements['code-evidence'].append(button);
+      }
     }
   }
 

@@ -227,4 +227,29 @@ test('collectFastApiOpenApi', async (t) => {
       assert.equal(result.diagnostic.type, 'oversized_output');
     });
   });
+
+  await t.test('redacts raw build stderr output to stable safe message', async () => {
+    await withTempDir(async (tmp) => {
+      await fs.promises.writeFile(path.join(tmp, 'requirements.txt'), '');
+      const runDocker = async (args) => {
+        if (args[0] === 'build') {
+          return { stdout: '', stderr: 'SENSITIVE SECRET RAW ERROR DUMP', exitCode: 1 };
+        }
+        return { exitCode: 0 };
+      };
+
+      const result = await collectFastApiOpenApi({
+        codePath: tmp,
+        appTarget: 'app:app',
+        runDocker,
+        timeoutMs: 5000,
+      });
+
+      assert.equal(result.openapi, null);
+      assert.ok(result.diagnostic);
+      assert.equal(result.diagnostic.type, 'build_error');
+      assert.equal(result.diagnostic.message, 'Sandbox build rejected dependencies');
+      assert.ok(!result.diagnostic.message.includes('SENSITIVE'));
+    });
+  });
 });

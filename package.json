@@ -2,7 +2,7 @@
   "name": "vlp-review-poc",
   "version": "0.1.0",
   "private": true,
-  "description": "Local VLP-inspired review sessions for vibe-coded JavaScript and TypeScript",
+  "description": "Local VLP-inspired review sessions for vibe-coded JavaScript/TypeScript with opt-in FastAPI support",
   "type": "module",
   "bin": {
     "vlp-review": "./bin/vlp-review.mjs"

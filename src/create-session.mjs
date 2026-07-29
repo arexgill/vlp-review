@@ -4,9 +4,8 @@ import { detectMismatches } from './detect-mismatches.mjs';
 import { compareFastApiContracts } from './fastapi-contracts.mjs';
 
 async function getRuntimeData(input, collectFastApiOpenApi) {
-  if (input.runtime !== 'fastapi') return { openapi: null, diagnostic: null };
-  if (!collectFastApiOpenApi) {
-    return { openapi: null, diagnostic: 'Docker runtime safely bypassed or unavailable' };
+  if (input.runtime !== 'fastapi' || !collectFastApiOpenApi) {
+    return { openapi: null, diagnostic: null };
   }
   const result = await collectFastApiOpenApi({
     codePath: input.codeRoot,

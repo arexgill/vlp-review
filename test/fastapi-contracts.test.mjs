@@ -20,8 +20,8 @@ test('produces method-drift question when static GET vs runtime POST', () => {
   const result = compareFastApiContracts({ prompt: '', staticContracts, openapi });
   assert.equal(result.length, 1);
   assert.equal(result[0].type, 'method-drift');
-  assert.equal(result[0].promptEvidence, 'main.py:10');
-  assert.equal(result[0].docUnitIds[0], 'openapi:/items/{item_id}');
+  assert.deepEqual(result[0].sourceEvidence, { file: 'main.py', lineStart: 10, target: '/items/{item_id}' });
+  assert.equal(result[0].runtimeEvidence.type, 'openapi-drift');
 });
 
 test('produces schema-drift question when response status/model mismatch', () => {
@@ -48,15 +48,15 @@ test('produces schema-drift question when response status/model mismatch', () =>
   const result = compareFastApiContracts({ prompt: '', staticContracts, openapi });
   assert.equal(result.length, 1);
   assert.equal(result[0].type, 'schema-drift');
-  assert.equal(result[0].promptEvidence, 'main.py:12');
-  assert.equal(result[0].docUnitIds[0], 'openapi:/items/{item_id}:get');
+  assert.deepEqual(result[0].sourceEvidence, { file: 'main.py', lineStart: 12, target: '/items/{item_id}' });
+  assert.equal(result[0].runtimeEvidence.type, 'openapi-drift');
 });
 
 test('produces safe runtime-diagnostic question on docker diagnostic', () => {
   const result = compareFastApiContracts({ prompt: '', staticContracts: [], openapi: null, diagnostic: 'Docker failed to start safely' });
   assert.equal(result.length, 1);
   assert.equal(result[0].type, 'runtime-diagnostic');
-  assert.equal(result[0].docUnitIds[0], 'diagnostic:docker');
+  assert.equal(result[0].runtimeEvidence.message, 'Docker failed to start safely');
 });
 
 test('produces no questions when matching contract', () => {
@@ -73,13 +73,7 @@ test('produces no questions when matching contract', () => {
       '/items/{item_id}': {
         get: {
           responses: {
-            '200': { 
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/Item' }
-                }
-              }
-            }
+            '200': { schemaRef: '#/components/schemas/Item' }
           }
         }
       }

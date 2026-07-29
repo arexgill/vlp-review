@@ -3,8 +3,9 @@ import { createHash } from 'node:crypto';
 function makeId(question) {
   const trace = [
     question.type,
-    question.promptEvidence,
-    question.docUnitIds.join(','),
+    question.promptEvidence || JSON.stringify(question.sourceEvidence || {}),
+    (question.docUnitIds || []).join(','),
+    JSON.stringify(question.runtimeEvidence || {}),
     question.ask
   ].join('\0');
   return `q-${createHash('sha1').update(trace).digest('hex').slice(0, 12)}`;
@@ -43,8 +44,9 @@ export function compareFastApiContracts({ prompt, staticContracts = [], openapi 
       title: 'FastAPI Runtime Verification Failed',
       ask: 'The local runtime failed to boot or respond securely. Should the implementation fix the underlying issue before review?',
       reason: 'Sandbox execution rejected the container or startup crashed safely.',
-      promptEvidence: 'fastapi runtime',
-      docUnitIds: ['diagnostic:docker']
+      sourceEvidence: { file: 'fastapi runtime', lineStart: 0 },
+      runtimeEvidence: { type: 'diagnostic', message: diagnostic },
+      docUnitIds: []
     });
   }
 
@@ -73,8 +75,9 @@ export function compareFastApiContracts({ prompt, staticContracts = [], openapi 
             title: `HTTP Method Drift: ${normalizedPath}`,
             ask: `Static analysis detected ${method.toUpperCase()} for ${normalizedPath}, but runtime exposes ${runtimeMethods}. Which is correct?`,
             reason: 'The OpenAPI runtime specification has a different HTTP method for this endpoint than the static source.',
-            promptEvidence: `${contract.file}:${contract.lineStart}`,
-            docUnitIds: [`openapi:${normalizedPath}`]
+            sourceEvidence: { file: contract.file, lineStart: contract.lineStart, target: normalizedPath },
+            runtimeEvidence: { type: 'openapi-drift', path: normalizedPath, methods: Object.keys(openapiPathObj) },
+            docUnitIds: []
           });
           continue;
         }
@@ -99,12 +102,9 @@ export function compareFastApiContracts({ prompt, staticContracts = [], openapi 
         // Check for model drift: 
         // We know static contract responseModel is a string (e.g., 'Item'). In OpenAPI it might be a $ref to '#/components/schemas/Item'
         if (contract.responseModel) {
-          // Very naive check
           const resp = openapiOp.responses[String(contract.statusCode) || '200'];
-          if (resp && resp.content && resp.content['application/json'] && resp.content['application/json'].schema) {
-            const schema = resp.content['application/json'].schema;
-            const ref = schema.$ref || (schema.items && schema.items.$ref);
-            if (ref && !ref.endsWith(`/${contract.responseModel}`)) {
+          if (resp && resp.schemaRef) {
+            if (!resp.schemaRef.endsWith(`/${contract.responseModel}`)) {
               schemaDrift = true;
             }
           }
@@ -117,8 +117,9 @@ export function compareFastApiContracts({ prompt, staticContracts = [], openapi 
             title: `Schema Drift: ${normalizedPath}`,
             ask: `The runtime schema (status/model) for ${method.toUpperCase()} ${normalizedPath} differs from the static contract. Which is correct?`,
             reason: 'The OpenAPI runtime response specification does not match the static annotation.',
-            promptEvidence: `${contract.file}:${contract.lineStart}`,
-            docUnitIds: [`openapi:${normalizedPath}:${method}`]
+            sourceEvidence: { file: contract.file, lineStart: contract.lineStart, target: normalizedPath },
+            runtimeEvidence: { type: 'openapi-drift', path: normalizedPath, method: method },
+            docUnitIds: []
           });
         }
       }

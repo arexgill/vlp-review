@@ -163,8 +163,9 @@ function redundantStepQuestions(statements, docUnits) {
 function deduplicateQuestions(questions) {
   const selected = new Map();
   for (const question of questions) {
-    const normalizedTrace = question.promptEvidence.trim().toLowerCase().replace(/\s+/g, ' ');
-    const key = normalizedTrace ? `trace:${normalizedTrace}` : `id:${question.id}`;
+    const traceVal = typeof question.promptEvidence === 'string' ? question.promptEvidence : JSON.stringify(question.sourceEvidence || {});
+    const normalizedTrace = traceVal.trim().toLowerCase().replace(/\s+/g, ' ');
+    const key = normalizedTrace && normalizedTrace !== '{}' ? `trace:${normalizedTrace}` : `id:${question.id}`;
     const existing = selected.get(key);
     if (!existing) {
       selected.set(key, question);

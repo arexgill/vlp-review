@@ -34,6 +34,27 @@ test('builds an agent-ready report without absolute paths', () => {
   assert.match(markdown, /broken\.ts:3/);
   assert.match(markdown, /Update the generated code/);
   assert.doesNotMatch(markdown, /\/Users\//);
+  assert.doesNotMatch(markdown, /Execution Boundary/);
+});
+
+test('includes safe execution boundary section for FastAPI runtimes', () => {
+  const fastapiSession = {
+    ...session,
+    fastapiApp: 'app:app',
+    runtimeDiagnostic: 'Docker offline',
+  };
+  const markdown = buildReport(fastapiSession, []);
+  assert.match(markdown, /## Execution Boundary/);
+  assert.match(markdown, /Docker offline/);
+  assert.match(markdown, /Endpoint execution is strictly omitted/);
+
+  const successSession = {
+    ...session,
+    fastapiApp: 'app:app',
+    openapi: { paths: {} }
+  };
+  const successMarkdown = buildReport(successSession, []);
+  assert.match(successMarkdown, /Safe OpenAPI payload collected locally via app:app/);
 });
 
 test('rejects unknown questions, decisions, duplicate answers, and empty corrections', () => {
