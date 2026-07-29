@@ -37,6 +37,24 @@ function evidenceFor(session, question) {
     .map(unit => `${clean(unit.file)}:${unit.lineStart || 1} — ${clean(unit.text)}`);
 }
 
+function appendFastApiEvidence(lines, question) {
+  if (question.sourceEvidence) {
+    const targetInfo = question.sourceEvidence.target ? ` (Target: ${clean(question.sourceEvidence.target)})` : '';
+    lines.push(`- **Source evidence:** ${clean(question.sourceEvidence.file)}:${question.sourceEvidence.lineStart || 1}${targetInfo}`);
+  }
+  if (question.runtimeEvidence) {
+    if (question.runtimeEvidence.type === 'diagnostic') {
+      lines.push(`- **Runtime OpenAPI evidence:** [Diagnostic] ${clean(question.runtimeEvidence.message)}`);
+    } else {
+      const parts = [
+        question.runtimeEvidence.path,
+        question.runtimeEvidence.methods ? question.runtimeEvidence.methods.join(',') : question.runtimeEvidence.method
+      ].filter(Boolean);
+      lines.push(`- **Runtime OpenAPI evidence:** [${clean(question.runtimeEvidence.type)}] ${clean(parts.join(' '))}`);
+    }
+  }
+}
+
 function renderResolvedItem(session, question, response) {
   const lines = [
     `### ${clean(question.title)} (${question.id})`,
@@ -46,6 +64,9 @@ function renderResolvedItem(session, question, response) {
   ];
   if (response.answer) lines.push(`- **User feedback:** ${response.answer}`);
   if (question.promptEvidence) lines.push(`- **Prompt trace:** ${clean(question.promptEvidence)}`);
+  
+  appendFastApiEvidence(lines, question);
+  
   const evidence = evidenceFor(session, question);
   lines.push(`- **Code/documentation trace:** ${evidence.length ? evidence.join('; ') : 'No direct source line was linked.'}`);
   return lines.join('\n');
@@ -67,12 +88,14 @@ export function buildReport(session, rawResponses = []) {
   for (const question of questions) {
     const response = responseById.get(question.id);
     if (!response) {
-      unresolved.push([
+      const lines = [
         `### ${clean(question.title)} (${question.id})`,
         '',
         `- **Question:** ${clean(question.ask)}`,
         `- **Reason:** ${clean(question.reason)}`
-      ].join('\n'));
+      ];
+      appendFastApiEvidence(lines, question);
+      unresolved.push(lines.join('\n'));
       continue;
     }
     const rendered = renderResolvedItem(session, question, response);

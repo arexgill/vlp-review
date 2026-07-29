@@ -63,3 +63,43 @@ test('rejects unknown questions, decisions, duplicate answers, and empty correct
   assert.throws(() => buildReport(session, [{ questionId: 'q-correct', decision: 'correct', answer: ' ' }]), /Correction text is required/);
   assert.throws(() => buildReport(session, [responses[0], responses[0]]), /Duplicate response/);
 });
+
+test('renders exact Markdown labels for FastAPI source and runtime evidence', () => {
+  const fapiSession = {
+    id: 'fapi-session',
+    questions: [
+      {
+        id: 'q-fapi-drift',
+        type: 'method-drift',
+        title: 'HTTP Method Drift',
+        ask: 'Static vs runtime differ.',
+        reason: 'Because.',
+        sourceEvidence: { file: 'main.py', lineStart: 12, target: '/items' },
+        runtimeEvidence: { type: 'openapi-drift', path: '/items', methods: ['get', 'post'] }
+      },
+      {
+        id: 'q-fapi-diag',
+        type: 'runtime-diagnostic',
+        title: 'FastAPI Runtime Verification Failed',
+        ask: 'Fail.',
+        reason: 'Docker failed.',
+        sourceEvidence: { file: 'fastapi runtime', lineStart: 0 },
+        runtimeEvidence: { type: 'diagnostic', message: 'Connection refused.' }
+      }
+    ]
+  };
+
+  const fapiResponses = [
+    { questionId: 'q-fapi-drift', decision: 'correct', answer: 'Update the contract to POST.' }
+  ];
+
+  const markdown = buildReport(fapiSession, fapiResponses);
+  
+  // Method drift rendered as resolved:
+  assert.match(markdown, /- \*\*Source evidence:\*\* main\.py:12 \(Target: \/items\)/);
+  assert.match(markdown, /- \*\*Runtime OpenAPI evidence:\*\* \[openapi-drift\] \/items get,post/);
+  
+  // Diagnostic rendered as unresolved:
+  assert.match(markdown, /- \*\*Source evidence:\*\* fastapi runtime:1/);
+  assert.match(markdown, /- \*\*Runtime OpenAPI evidence:\*\* \[Diagnostic\] Connection refused\./);
+});

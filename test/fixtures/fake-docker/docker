@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+if [[ "$1" == "build" ]]; then
+  echo "sha256:fakeimage123"
+  exit 0
+elif [[ "$1" == "rmi" ]]; then
+  exit 0
+elif [[ "$1" == "run" ]]; then
+  # Output the mock OpenAPI json
+  cat << 'JSON_EOF'
+{
+  "paths": {
+    "/items/{item_id}": {
+      "post": {
+        "responses": {
+          "201": {
+            "schemaRef": "#/components/schemas/OtherModel"
+          }
+        }
+      }
+    }
+  }
+}
+JSON_EOF
+  exit 0
+fi
+exit 1

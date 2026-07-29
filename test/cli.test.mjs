@@ -105,7 +105,7 @@ test('starts a complete local review session with browser opening disabled', asy
   });
 });
 
-test('starts a FastAPI runtime session securely handling diagnostics', async () => {
+test('starts a FastAPI runtime session and catches failure diagnostic', async () => {
   const port = await reservePort();
   const args = [
     cli,
@@ -118,7 +118,8 @@ test('starts a FastAPI runtime session securely handling diagnostics', async () 
   ];
 
   await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, { cwd: root });
+    const env = { ...process.env, PATH: `${path.join(root, 'test/fixtures/fake-docker-fail')}:${process.env.PATH || ''}` };
+    const child = spawn(process.execPath, args, { cwd: root, env });
     let stdout = '';
     let stderr = '';
     const timeout = setTimeout(() => {
@@ -136,15 +137,13 @@ test('starts a FastAPI runtime session securely handling diagnostics', async () 
           .then(data => {
             try {
               assert.equal(data.fastapiApp, 'app.main:app');
-              assert.ok(data.runtimeDiagnostic || data.openapi); // either diagnostic or successful run
-              // The API shouldn't leak absolute paths
+              assert.ok(data.runtimeDiagnostic);
               assert.doesNotMatch(JSON.stringify(data), new RegExp(root));
 
               const diagnosticQuestion = data.questions.find(q => q.type === 'runtime-diagnostic');
-              if (data.runtimeDiagnostic) {
-                assert.ok(diagnosticQuestion);
-                assert.equal(diagnosticQuestion.runtimeEvidence.type, 'diagnostic');
-              }
+              assert.ok(diagnosticQuestion);
+              assert.equal(diagnosticQuestion.runtimeEvidence.type, 'diagnostic');
+              assert.match(diagnosticQuestion.runtimeEvidence.message, /Sandbox build rejected/);
 
               child.kill('SIGTERM');
               resolve();
@@ -163,11 +162,82 @@ test('starts a FastAPI runtime session securely handling diagnostics', async () 
       clearTimeout(timeout);
       reject(error);
     });
-    child.once('close', code => {
-      if (!stdout.includes('VLP review ready at')) {
+  });
+});
+
+test('starts a FastAPI runtime session, detects drift, and renders evidence via API', async () => {
+  const port = await reservePort();
+  const args = [
+    cli,
+    '--prompt', 'test/fixtures/fastapi-basic/intent.md',
+    '--code', 'test/fixtures/fastapi-basic/app',
+    '--port', String(port),
+    '--no-open',
+    '--runtime', 'fastapi',
+    '--fastapi-app', 'app.main:app'
+  ];
+
+  await new Promise((resolve, reject) => {
+    // Inject fake docker
+    const env = { ...process.env, PATH: `${path.join(root, 'test/fixtures/fake-docker')}:${process.env.PATH || ''}` };
+    const child = spawn(process.execPath, args, { cwd: root, env });
+    let stdout = '';
+    let stderr = '';
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error(`CLI startup timed out. stdout=${stdout} stderr=${stderr}`));
+    }, 15000);
+
+    child.stdout.on('data', chunk => {
+      stdout += chunk;
+      if (stdout.includes(`VLP review ready at http://127.0.0.1:${port}`)) {
         clearTimeout(timeout);
-        reject(new Error(`CLI exited before startup (${code}). stderr=${stderr}`));
+
+        fetch(`http://127.0.0.1:${port}/api/session`)
+          .then(res => res.json())
+          .then(async data => {
+            try {
+              assert.equal(data.fastapiApp, 'app.main:app');
+              if (!data.openapi) {
+                console.error('Missing openapi. Session data:', JSON.stringify(data, null, 2));
+              }
+              assert.ok(data.openapi, 'Should have populated OpenAPI from fake docker');
+              assert.equal(data.runtimeDiagnostic, null);
+
+              const driftQuestion = data.questions.find(q => q.type === 'method-drift');
+              assert.ok(driftQuestion, 'Should have generated a method drift question');
+              assert.equal(driftQuestion.runtimeEvidence.type, 'openapi-drift');
+              assert.deepEqual(driftQuestion.runtimeEvidence.methods, ['post']);
+
+              // Test if report consumes the question and renders labeled evidence
+              const reportRes = await fetch(`http://127.0.0.1:${port}/api/report`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify([
+                  { questionId: driftQuestion.id, decision: 'correct', answer: 'Use GET instead' }
+                ])
+              });
+              const reportBody = await reportRes.json();
+              const report = reportBody.markdown;
+              assert.match(report, /- \*\*Source evidence:\*\* main\.py:12/);
+              assert.match(report, /- \*\*Runtime OpenAPI evidence:\*\* \[openapi-drift\] \/items\/{item_id} post/);
+
+              child.kill('SIGTERM');
+              resolve();
+            } catch (error) {
+              child.kill('SIGTERM');
+              reject(error);
+            }
+          }).catch(err => {
+            child.kill('SIGTERM');
+            reject(err);
+          });
       }
+    });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('error', error => {
+      clearTimeout(timeout);
+      reject(error);
     });
   });
 });
