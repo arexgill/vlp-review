@@ -34,7 +34,8 @@ test('extractFastApiContracts', async (t) => {
 
     assert.equal(spawnArgs.command, 'python3');
     assert.equal(spawnArgs.args.length, 1);
-    assert.ok(spawnArgs.args[0].endsWith('scripts/extract-fastapi.py'), 'Must run exactly the repository helper script');
+    const repoRoot = path.resolve(__dirname);
+    assert.equal(spawnArgs.args[0], path.resolve(repoRoot, 'scripts/extract-fastapi.py'), 'Must run exactly the repository helper script');
 
     // Check that source is passed exactly via stdin
     const parsedStdin = JSON.parse(stdinData);

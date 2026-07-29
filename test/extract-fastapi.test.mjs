@@ -8,11 +8,33 @@ test('extract-fastapi.py adheres to strict static safety rules', () => {
   const scriptPath = path.resolve('scripts/extract-fastapi.py');
   const source = readFileSync(scriptPath, 'utf8');
 
-  // Import allowlist: only ast, json, sys.
-  // We strictly check that no other imports exist.
-  const importLines = source.split('\n').filter(line => line.startsWith('import ') || line.startsWith('from '));
+  const astCheckCode = `
+import ast
+import sys
+import json
+
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
+    source = f.read()
+
+tree = ast.parse(source)
+
+imports = []
+for node in ast.walk(tree):
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            imports.append(f"import {alias.name}")
+    elif isinstance(node, ast.ImportFrom):
+        module = node.module or ''
+        imports.append(f"from {module}")
+
+print(json.dumps(list(set(imports))))
+`;
+
+  const astResult = spawnSync('python3', ['-c', astCheckCode, scriptPath], { encoding: 'utf8' });
+  const actualImports = JSON.parse(astResult.stdout).sort();
+
   assert.deepEqual(
-    importLines.sort(),
+    actualImports,
     ['import ast', 'import json', 'import sys'],
     'Only ast, json, and sys may be imported'
   );
@@ -105,12 +127,9 @@ def get_b():
   });
 
   const out = JSON.parse(result.stdout);
-  assert.equal(out.routes.length, 2); // It yields multiple paths due to the branches: B -> A -> app, B -> A -> B (cycle)
+  assert.equal(out.routes.length, 1); // No synthetic cyclic route should be emitted
 
   const paths = out.routes.map(r => r.path).sort();
-  // We should have at least the path starting from root.
-  assert.ok(paths.includes('/root/a/to_b/b/item'));
-  // And due to the cycle B -> A -> B (which terminates at B returning "B's base"), it might also generate:
-  // /a/to_a/b/to_b/b/item or similar, depending on how visited set treats the root.
-  // We just assert it doesn't crash and has the valid root path.
+  // We should have exactly the path starting from root.
+  assert.equal(paths[0], '/root/a/to_b/b/item');
 });

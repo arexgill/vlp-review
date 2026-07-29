@@ -54,8 +54,10 @@ def extract_from_ast(files_data):
     def get_composite_prefixes(router_name, visited=None):
         if visited is None:
             visited = set()
-        if not router_name or router_name in visited:
+        if not router_name:
             return [""]
+        if router_name in visited:
+            return []
 
         visited.add(router_name)
         router_prefix = routers.get(router_name, "")

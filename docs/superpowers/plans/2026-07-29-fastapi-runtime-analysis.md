@@ -6,7 +6,7 @@
 
 **Architecture:** Create a Python AST adapter and normalized FastAPI route-contract records, then add a Docker runner that returns only bounded OpenAPI JSON or safe diagnostics. Feed static/runtime contracts into the existing session, mismatch detector, browser, and repair report as evidence; never execute project Python on the host.
 
-**Tech Stack:** Node.js ESM, Python standard-library `ast` through a fixed container helper, Docker CLI behind an injected runner, FastAPI fixture projects, Node test runner.
+**Tech Stack:** Node.js ESM, Python standard-library `ast` through a host repository-owned stdlib AST helper boundary, Docker CLI behind an injected runner, FastAPI fixture projects, Node test runner.
 
 ## Global Constraints
 
