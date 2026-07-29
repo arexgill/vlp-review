@@ -13,7 +13,7 @@ const ids = [
   'prompt-evidence', 'code-evidence', 'correction-text', 'response-error',
   'accept-button', 'correct-button', 'irrelevant-button', 'previous-button',
   'next-button', 'finish-button', 'report-panel', 'report-output', 'copy-report',
-  'download-report'
+  'download-report', 'runtime-block', 'runtime-disclosure', 'runtime-list'
 ];
 const elements = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
 
@@ -72,6 +72,7 @@ function renderAll() {
   renderStats();
   renderSource();
   renderDocumentation();
+  renderRuntime();
   renderDiagnostics();
   renderQuestion();
 }
@@ -148,6 +149,31 @@ function renderDocumentation() {
     );
     button.addEventListener('click', () => showSourceEvidence(unit));
     list.append(button);
+  }
+}
+
+function renderRuntime() {
+  const block = elements['runtime-block'];
+  const disclosure = elements['runtime-disclosure'];
+  const list = elements['runtime-list'];
+
+  if (!state.session.fastapiApp) {
+    block.style.display = 'none';
+    return;
+  }
+
+  block.style.display = 'block';
+  disclosure.textContent = 'Execution Boundary: Endpoint logic is never executed. Only safe OpenAPI metadata is extracted to verify static routes. Requires manual opt-in.';
+  list.replaceChildren();
+
+  list.append(makeElement('p', 'diagnostic', `Target App: ${state.session.fastapiApp}`));
+  list.append(makeElement('p', 'diagnostic', `Static Routes: ${(state.session.fastapiStaticContracts || []).length}`));
+
+  if (state.session.runtimeDiagnostic) {
+    list.append(makeElement('p', 'diagnostic', `Diagnostic: ${state.session.runtimeDiagnostic}`));
+  } else if (state.session.openapi && state.session.openapi.paths) {
+    const routeCount = Object.keys(state.session.openapi.paths).length;
+    list.append(makeElement('p', 'diagnostic', `Runtime Routes: ${routeCount}`));
   }
 }
 

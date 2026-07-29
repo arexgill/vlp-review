@@ -101,7 +101,12 @@ export function createVlpServer({ session, publicDir }) {
           sendJson(response, 405, { error: 'Method not allowed' }, { allow: 'GET' });
           return;
         }
-        sendJson(response, 200, session);
+
+        const clientSession = {
+          ...session,
+          openapi: session.openapi ? { paths: Object.keys(session.openapi.paths || {}) } : null
+        };
+        sendJson(response, 200, clientSession);
         return;
       }
 

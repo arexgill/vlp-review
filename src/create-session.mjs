@@ -1,10 +1,37 @@
 import { createHash } from 'node:crypto';
 import { analyzeSources } from './analyze-source.mjs';
 import { detectMismatches } from './detect-mismatches.mjs';
+import { compareFastApiContracts } from './fastapi-contracts.mjs';
 
-export async function createSession(input) {
+async function getRuntimeData(input, collectFastApiOpenApi) {
+  if (input.runtime !== 'fastapi') return { openapi: null, diagnostic: null };
+  if (!collectFastApiOpenApi) {
+    return { openapi: null, diagnostic: 'Docker runtime safely bypassed or unavailable' };
+  }
+  const result = await collectFastApiOpenApi({
+    codePath: input.codeRoot,
+    appTarget: input.fastapiApp,
+    timeoutMs: 15000
+  });
+  return {
+    openapi: result.openapi,
+    diagnostic: result.diagnostic ? `${result.diagnostic.type}: ${result.diagnostic.message}` : null
+  };
+}
+
+export async function createSession(input, inject = {}) {
   const { docUnits, diagnostics, fastapiStaticContracts } = await analyzeSources(input.sources);
-  const questions = detectMismatches({ prompt: input.prompt, docUnits });
+  const runtimeData = await getRuntimeData(input, inject.collectFastApiOpenApi);
+
+  const fastapiQuestions = compareFastApiContracts({
+    prompt: input.prompt,
+    staticContracts: fastapiStaticContracts,
+    openapi: runtimeData.openapi,
+    diagnostic: runtimeData.diagnostic
+  });
+
+  const questions = detectMismatches({ prompt: input.prompt, docUnits, fastapiQuestions });
+
   const fingerprint = createHash('sha256')
     .update(input.prompt)
     .update('\0')
@@ -19,6 +46,9 @@ export async function createSession(input) {
     docUnits,
     diagnostics,
     fastapiStaticContracts,
+    openapi: runtimeData.openapi,
+    runtimeDiagnostic: runtimeData.diagnostic,
+    fastapiApp: input.fastapiApp || null,
     questions,
     meta: {
       sourceCount: input.sources.length,

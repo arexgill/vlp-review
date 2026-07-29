@@ -38,7 +38,7 @@ npm unlink --global vlp-review-poc
 ## CLI
 
 ```text
-vlp-review --prompt <file> --code <file-or-directory> [--port <number>] [--no-open]
+vlp-review --prompt <file> --code <file-or-directory> [--port <number>] [--no-open] [--runtime fastapi] [--fastapi-app module:app]
 ```
 
 | Option | Meaning |
@@ -46,6 +46,8 @@ vlp-review --prompt <file> --code <file-or-directory> [--port <number>] [--no-op
 | `--prompt <file>` | Required UTF-8 text or Markdown prompt. |
 | `--code <path>` | Required generated source file or directory. |
 | `--port <number>` | Local port from 1–65535. Default: `4317`. |
+| `--runtime <name>` | Integration test environment (e.g., `fastapi`). |
+| `--fastapi-app <target>` | Target application import path (e.g., `app.main:app`). |
 | `--no-open` | Start the server without opening a browser. |
 | `-h`, `--help` | Print usage. |
 
@@ -74,7 +76,8 @@ Responses persist in browser `localStorage` under the session fingerprint, so a 
 - The HTTP server binds only to `127.0.0.1`.
 - Prompt, source, documentation, and responses are never sent to a remote service.
 - No LLM API key is required.
-- Source is parsed as text and is never imported, executed, or evaluated.
+- **Runtime execution boundary:** For explicit opt-ins using `--runtime fastapi`, source is never evaluated directly on the host machine. Instead, a prerequisite Docker sandbox is required. Endpoint logic is never executed. Only safe OpenAPI metadata is extracted to verify static routes.
+- Source is parsed as text and is never imported, executed, or evaluated outside the sandbox.
 - Static serving uses an allowlist; project files cannot be fetched through the server.
 - API request bodies are limited to 256 KiB.
 - Responses use a restrictive Content Security Policy and `no-store` caching.
@@ -86,7 +89,7 @@ You can confirm the local boundary in browser developer tools: session traffic s
 Supported extensions:
 
 ```text
-.js .mjs .cjs .jsx .ts .tsx
+.js .mjs .cjs .jsx .ts .tsx .py (with --runtime fastapi)
 ```
 
 Ignored directories:
@@ -160,6 +163,6 @@ This package demonstrates only a practical version of the human-review workflow.
 - No automatic source edits.
 - No code execution or test running against the reviewed project.
 - No remote model integration.
-- No Python or non-JS/TS language adapters yet.
+- No Python or non-JS/TS language adapters yet (except Python static parsing via FastAPI integration).
 - No public npm publication in this task.
 - No formal guarantee that accepted code matches user intent.

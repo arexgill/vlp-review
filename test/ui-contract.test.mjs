@@ -23,7 +23,7 @@ test('contains every required review control and safe asset reference', async ()
     'question-reason', 'prompt-evidence', 'code-evidence', 'correction-text',
     'accept-button', 'correct-button', 'irrelevant-button', 'previous-button',
     'next-button', 'finish-button', 'report-panel', 'report-output', 'copy-report',
-    'download-report'
+    'download-report', 'runtime-block', 'runtime-disclosure', 'runtime-list'
   ];
   ids.forEach(id => assert.match(html, new RegExp(`id="${id}"`), `Missing #${id}`));
   assert.match(html, /href="\/styles\.css"/);

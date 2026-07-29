@@ -12,7 +12,8 @@ const session = {
   docUnits: [],
   diagnostics: [],
   questions: [],
-  meta: {}
+  meta: {},
+  openapi: { paths: { '/test': {} }, raw: 'should-be-removed' }
 };
 
 async function runningServer(t) {
@@ -31,7 +32,9 @@ test('serves the session, report API, static allowlist, and security headers', a
 
   const response = await fetch(`${address.url}/api/session`);
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).id, 'session-http');
+  const data = await response.json();
+  assert.equal(data.id, 'session-http');
+  assert.deepEqual(data.openapi, { paths: ['/test'] });
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
   assert.match(response.headers.get('content-security-policy'), /default-src 'self'/);

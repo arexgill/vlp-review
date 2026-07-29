@@ -2,12 +2,14 @@ const DEFAULT_PORT = 4317;
 
 export function usage() {
   return `Usage:
-  vlp-review --prompt <file> --code <file-or-directory> [--port <number>] [--no-open]
+  vlp-review --prompt <file> --code <file-or-directory> [--port <number>] [--no-open] [--runtime fastapi] [--fastapi-app module:app]
 
 Options:
   --prompt <file>            Original prompt as UTF-8 text or Markdown
   --code <path>              Generated JS/TS file or directory
   --port <number>            Local port (default: ${DEFAULT_PORT})
+  --runtime <name>           Integration test environment (e.g., fastapi)
+  --fastapi-app <target>     Target application import path (e.g., app.main:app)
   --no-open                  Print URL without opening a browser
   -h, --help                 Show this help`;
 }

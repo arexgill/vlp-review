@@ -3,6 +3,9 @@ import { keywordsFrom } from './analyze-source.mjs';
 
 const SEVERITY_WEIGHT = { high: 3, medium: 2, low: 1 };
 const TYPE_PRIORITY = {
+  'runtime-diagnostic': 10,
+  'method-drift': 9,
+  'schema-drift': 8,
   'api-use': 7,
   'wrong-flow': 6,
   'wrong-operation': 6,
@@ -176,9 +179,10 @@ function deduplicateQuestions(questions) {
   return [...selected.values()];
 }
 
-export function detectMismatches({ prompt, docUnits }) {
+export function detectMismatches({ prompt, docUnits, fastapiQuestions = [] }) {
   const statements = splitPrompt(prompt);
   const questions = [
+    ...fastapiQuestions,
     ...missingStepQuestions(statements, docUnits),
     ...wrongValueQuestions(prompt, docUnits),
     ...errorHandlingQuestion(prompt, docUnits),

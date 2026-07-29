@@ -6,6 +6,7 @@ import { loadInput } from '../src/load-input.mjs';
 import { createSession } from '../src/create-session.mjs';
 import { createVlpServer, listen } from '../src/server.mjs';
 import { openBrowser } from '../src/open-browser.mjs';
+import { collectFastApiOpenApi } from '../src/fastapi-runtime.mjs';
 
 async function main() {
   try {
@@ -17,9 +18,14 @@ async function main() {
 
     const input = await loadInput({
       promptPath: options.promptPath,
-      codePath: options.codePath
+      codePath: options.codePath,
+      runtime: options.runtime
     });
-    const session = await createSession(input);
+    const session = await createSession({
+      ...input,
+      runtime: options.runtime,
+      fastapiApp: options.fastapiApp
+    }, { collectFastApiOpenApi });
     const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
     const server = createVlpServer({ session, publicDir });
     const address = await listen(server, { port: options.port });
