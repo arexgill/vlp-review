@@ -1,21 +1,50 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export async function collectFastApiOpenApi({ codePath, appTarget, runDocker, timeoutMs }) {
   if (!runDocker) {
-    runDocker = async (args, { signal }) => {
+    runDocker = async (args, { signal, input } = {}) => {
       // In production, spawn docker CLI
       return new Promise((resolve, reject) => {
         const proc = spawn('docker', args, { signal });
         let stdout = '';
         let stderr = '';
-        proc.stdout.on('data', d => stdout += d.toString());
-        proc.stderr.on('data', d => stderr += d.toString());
+        let stdoutBytes = 0;
+        let stderrBytes = 0;
+        const MAX_BYTES = 10 * 1024 * 1024;
+        let overflow = false;
+
+        const onData = (d, isStdout) => {
+          if (overflow) return;
+          if (isStdout) stdoutBytes += d.length;
+          else stderrBytes += d.length;
+
+          if (stdoutBytes > MAX_BYTES || stderrBytes > MAX_BYTES) {
+            overflow = true;
+            proc.kill('SIGKILL');
+            return resolve({ stdout: '', stderr: '', exitCode: 1, overflow: true });
+          }
+
+          if (isStdout) stdout += d.toString();
+          else stderr += d.toString();
+        };
+
+        proc.stdout.on('data', d => onData(d, true));
+        proc.stderr.on('data', d => onData(d, false));
+
+        if (input) {
+          proc.stdin.write(input);
+          proc.stdin.end();
+        }
+
         proc.on('close', code => {
-          resolve({ stdout, stderr, exitCode: code });
+          if (!overflow) {
+            resolve({ stdout, stderr, exitCode: code });
+          }
         });
         proc.on('error', err => {
           reject(err);
@@ -26,6 +55,47 @@ export async function collectFastApiOpenApi({ codePath, appTarget, runDocker, ti
 
   const scriptPath = path.resolve(__dirname, '../scripts/collect-openapi.py');
   const scriptName = 'collect-openapi.py';
+
+  let requirements;
+  try {
+    requirements = await fs.promises.readFile(path.join(codePath, 'requirements.txt'), 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return { openapi: null, diagnostic: { type: 'missing_manifest', message: 'No requirements.txt found' } };
+    }
+    return { openapi: null, diagnostic: { type: 'docker_error', message: err.message } };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  const dockerfile = `FROM python:3.11-slim
+WORKDIR /deps
+RUN echo "${Buffer.from(requirements).toString('base64')}" | base64 -d > requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt -t /deps
+`;
+
+  let buildResult;
+  try {
+    buildResult = await runDocker(['build', '-q', '-'], { signal: controller.signal, input: dockerfile });
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') return { openapi: null, diagnostic: { type: 'timeout', message: 'Docker execution timed out' } };
+    if (err.code === 'ENOENT') return { openapi: null, diagnostic: { type: 'docker_absence', message: 'Docker is not installed or not in PATH' } };
+    return { openapi: null, diagnostic: { type: 'docker_error', message: err.message } };
+  }
+
+  if (buildResult.overflow) {
+    clearTimeout(timeoutId);
+    return { openapi: null, diagnostic: { type: 'oversized_output', message: 'Build output exceeded size limit' } };
+  }
+
+  if (buildResult.exitCode !== 0) {
+    clearTimeout(timeoutId);
+    return { openapi: null, diagnostic: { type: 'build_error', message: buildResult.stderr || 'Build failed' } };
+  }
+
+  const imageId = buildResult.stdout.trim();
 
   const dockerArgs = [
     'run',
@@ -39,18 +109,15 @@ export async function collectFastApiOpenApi({ codePath, appTarget, runDocker, ti
     '-v', `${codePath}:/app:ro`,
     '-v', `${scriptPath}:/scripts/${scriptName}:ro`,
     '-w', '/app',
-    'python:3.11-slim',
+    '-e', 'PYTHONPATH=/deps',
+    imageId,
     'python', `/scripts/${scriptName}`, appTarget
   ];
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   let result;
   try {
     result = await runDocker(dockerArgs, { signal: controller.signal });
   } catch (err) {
-    clearTimeout(timeoutId);
     if (err.name === 'AbortError') {
       return { openapi: null, diagnostic: { type: 'timeout', message: 'Docker execution timed out' } };
     }
@@ -58,8 +125,14 @@ export async function collectFastApiOpenApi({ codePath, appTarget, runDocker, ti
       return { openapi: null, diagnostic: { type: 'docker_absence', message: 'Docker is not installed or not in PATH' } };
     }
     return { openapi: null, diagnostic: { type: 'docker_error', message: err.message } };
+  } finally {
+    clearTimeout(timeoutId);
+    runDocker(['rmi', '-f', imageId], { signal: AbortSignal.timeout(5000) }).catch(() => {});
   }
-  clearTimeout(timeoutId);
+
+  if (result.overflow) {
+    return { openapi: null, diagnostic: { type: 'oversized_output', message: 'Output exceeded size limit' } };
+  }
 
   if (result.exitCode !== 0) {
     return { 
@@ -69,12 +142,6 @@ export async function collectFastApiOpenApi({ codePath, appTarget, runDocker, ti
         message: `Docker process exited with code ${result.exitCode}` 
       } 
     };
-  }
-
-  // Ensure bounded stdout, but here we just parse it. The runner would bounded it in real execution,
-  // or we can check length.
-  if (result.stdout.length > 10 * 1024 * 1024) {
-    return { openapi: null, diagnostic: { type: 'oversized_output', message: 'Output exceeded size limit' } };
   }
 
   let parsed;
