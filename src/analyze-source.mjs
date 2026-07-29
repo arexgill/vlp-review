@@ -1,5 +1,6 @@
 import { parse } from '@babel/parser';
 import { createHash } from 'node:crypto';
+import { extractFastApiContracts } from './python-analyzer.mjs';
 
 const STOP_WORDS = new Set([
   'the', 'a', 'an', 'to', 'of', 'and', 'or', 'is', 'it', 'this', 'that',
@@ -154,11 +155,14 @@ function parserPlugins(source) {
   return plugins;
 }
 
-export function analyzeSources(sources) {
+export async function analyzeSources(sources) {
   const docUnits = [];
   const diagnostics = [];
+  const fastapiStaticContracts = [];
+  const pythonFiles = sources.filter(s => s.language === 'python');
 
   for (const source of sources) {
+    if (source.language === 'python') continue;
     try {
       const ast = parse(source.content, {
         sourceType: 'unambiguous',
@@ -175,5 +179,26 @@ export function analyzeSources(sources) {
     }
   }
 
-  return { docUnits, diagnostics };
+  if (pythonFiles.length > 0) {
+    const pythonPayload = {
+      files: pythonFiles.map(f => ({
+        path: f.path,
+        source: f.content
+      }))
+    };
+    try {
+      const pythonResult = await extractFastApiContracts(pythonPayload);
+      if (pythonResult.units) docUnits.push(...pythonResult.units);
+      if (pythonResult.routes) fastapiStaticContracts.push(...pythonResult.routes);
+      if (pythonResult.diagnostics) diagnostics.push(...pythonResult.diagnostics);
+    } catch (err) {
+      diagnostics.push({
+        file: 'python-analyzer',
+        message: err.message,
+        line: 0
+      });
+    }
+  }
+
+  return { docUnits, diagnostics, fastapiStaticContracts };
 }

@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { analyzeSources } from './analyze-source.mjs';
 import { detectMismatches } from './detect-mismatches.mjs';
 
-export function createSession(input) {
-  const { docUnits, diagnostics } = analyzeSources(input.sources);
+export async function createSession(input) {
+  const { docUnits, diagnostics, fastapiStaticContracts } = await analyzeSources(input.sources);
   const questions = detectMismatches({ prompt: input.prompt, docUnits });
   const fingerprint = createHash('sha256')
     .update(input.prompt)
@@ -18,6 +18,7 @@ export function createSession(input) {
     sources: input.sources,
     docUnits,
     diagnostics,
+    fastapiStaticContracts,
     questions,
     meta: {
       sourceCount: input.sources.length,

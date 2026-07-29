@@ -21,8 +21,8 @@ const ts = {
 };`
 };
 
-test('documents signatures, conditions, calls, returns, and throws', () => {
-  const result = analyzeSources([js, ts]);
+test('documents signatures, conditions, calls, returns, and throws', async () => {
+  const result = await analyzeSources([js, ts]);
   assert.deepEqual(result.diagnostics, []);
   assert.ok(result.docUnits.some(unit => unit.symbol === 'search' && unit.kind === 'signature'));
   assert.ok(result.docUnits.some(unit => unit.file === 'search.js' && unit.kind === 'condition' && unit.code === '!query'));
@@ -32,9 +32,9 @@ test('documents signatures, conditions, calls, returns, and throws', () => {
   assert.equal(new Set(result.docUnits.map(unit => unit.id)).size, result.docUnits.length);
 });
 
-test('returns a diagnostic and preserves other parseable files', () => {
+test('returns a diagnostic and preserves other parseable files', async () => {
   const broken = { path: 'broken.js', language: 'javascript', content: 'function {' };
-  const result = analyzeSources([broken, js]);
+  const result = await analyzeSources([broken, js]);
   assert.equal(result.diagnostics.length, 1);
   assert.equal(result.diagnostics[0].file, 'broken.js');
   assert.ok(result.docUnits.some(unit => unit.file === 'search.js'));
