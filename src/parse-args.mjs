@@ -16,6 +16,8 @@ export function parseArgs(argv) {
   const result = {
     promptPath: null,
     codePath: null,
+    runtime: null,
+    fastapiApp: null,
     port: DEFAULT_PORT,
     open: true,
     help: false
@@ -31,7 +33,7 @@ export function parseArgs(argv) {
       result.open = false;
       continue;
     }
-    if (!['--prompt', '--code', '--port'].includes(option)) {
+    if (!['--prompt', '--code', '--port', '--runtime', '--fastapi-app'].includes(option)) {
       throw new Error(`Unknown option: ${option}`);
     }
 
@@ -43,6 +45,18 @@ export function parseArgs(argv) {
 
     if (option === '--prompt') result.promptPath = value;
     if (option === '--code') result.codePath = value;
+    if (option === '--runtime') {
+      if (value !== 'fastapi') {
+        throw new Error('--runtime must be fastapi');
+      }
+      result.runtime = value;
+    }
+    if (option === '--fastapi-app') {
+      if (!/^[A-Za-z_][\w.]*:[A-Za-z_]\w*$/.test(value)) {
+        throw new Error('--fastapi-app must match module:attribute');
+      }
+      result.fastapiApp = value;
+    }
     if (option === '--port') {
       const port = Number(value);
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -54,6 +68,13 @@ export function parseArgs(argv) {
 
   if (!result.help && (!result.promptPath || !result.codePath)) {
     throw new Error('Both --prompt and --code are required');
+  }
+
+  if (result.runtime === 'fastapi' && !result.fastapiApp) {
+    throw new Error('Requires --fastapi-app when using --runtime fastapi');
+  }
+  if (result.fastapiApp && result.runtime !== 'fastapi') {
+    throw new Error('Requires --runtime fastapi when using --fastapi-app');
   }
 
   return result;

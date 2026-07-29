@@ -50,3 +50,46 @@ test('rejects unsupported and empty code inputs', async () => {
     /No supported source files/
   );
 });
+
+test('fastapi runtime includes .py, ignores non-py without failing, honors file limits, without execution', async () => {
+  const root = await fixture();
+  await writeFile(path.join(root, 'src', 'main.py'), 'print("do not run")\nraise SystemExit("should not run")');
+  await writeFile(path.join(root, 'src', 'app.py'), 'app = {}');
+  
+  // Outside fastapi runtime, .py is ignored
+  const noRuntimeInput = await loadInput({
+    promptPath: path.join(root, 'prompt.md'),
+    codePath: path.join(root, 'src')
+  });
+  assert.deepEqual(noRuntimeInput.sources.map(s => s.path), ['a.js', 'b.ts']);
+
+  // Inside fastapi runtime, .py is included deterministically
+  const fastapiInput = await loadInput({
+    promptPath: path.join(root, 'prompt.md'),
+    codePath: path.join(root, 'src'),
+    runtime: 'fastapi'
+  });
+  assert.deepEqual(
+    fastapiInput.sources.map(s => s.path),
+    ['a.js', 'app.py', 'b.ts', 'main.py']
+  );
+  assert.deepEqual(
+    fastapiInput.sources.map(s => s.language),
+    ['javascript', 'python', 'typescript', 'python']
+  );
+  
+  // Prove 200 file limit
+  const limitRoot = await mkdtemp(path.join(tmpdir(), 'vlp-limit-'));
+  await writeFile(path.join(limitRoot, 'prompt.md'), 'test');
+  await mkdir(path.join(limitRoot, 'src'));
+  const promises = [];
+  for (let i = 0; i < 201; i++) {
+    promises.push(writeFile(path.join(limitRoot, 'src', `f${i}.py`), '#'));
+  }
+  await Promise.all(promises);
+
+  await assert.rejects(
+    loadInput({ promptPath: path.join(limitRoot, 'prompt.md'), codePath: path.join(limitRoot, 'src'), runtime: 'fastapi' }),
+    /Source limit exceeded/
+  );
+});

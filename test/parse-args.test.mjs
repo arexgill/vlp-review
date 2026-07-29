@@ -5,14 +5,14 @@ import { parseArgs, usage } from '../src/parse-args.mjs';
 test('parses required paths and optional flags', () => {
   assert.deepEqual(
     parseArgs(['--prompt', 'prompt.md', '--code', 'src', '--port', '4400', '--no-open']),
-    { promptPath: 'prompt.md', codePath: 'src', port: 4400, open: false, help: false }
+    { promptPath: 'prompt.md', codePath: 'src', runtime: null, fastapiApp: null, port: 4400, open: false, help: false }
   );
 });
 
 test('defaults to port 4317 and opens the browser', () => {
   assert.deepEqual(
     parseArgs(['--prompt', 'prompt.md', '--code', 'app.ts']),
-    { promptPath: 'prompt.md', codePath: 'app.ts', port: 4317, open: true, help: false }
+    { promptPath: 'prompt.md', codePath: 'app.ts', runtime: null, fastapiApp: null, port: 4317, open: true, help: false }
   );
 });
 
@@ -28,4 +28,10 @@ test('rejects missing values, unknown flags, and invalid ports', () => {
     () => parseArgs(['--prompt', 'p', '--code', 'c', '--port', '70000']),
     /between 1 and 65535/
   );
+});
+
+test('requires a module attribute for FastAPI runtime', () => {
+  assert.throws(() => parseArgs(['--prompt', 'intent.md', '--code', 'app', '--runtime', 'fastapi']), /--fastapi-app/);
+  assert.throws(() => parseArgs(['--prompt', 'intent.md', '--code', 'app', '--fastapi-app', 'app.main:app']), /--runtime fastapi/);
+  assert.deepEqual(parseArgs(['--prompt', 'intent.md', '--code', 'app', '--runtime', 'fastapi', '--fastapi-app', 'app.main:app']).runtime, 'fastapi');
 });
