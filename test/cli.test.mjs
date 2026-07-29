@@ -213,14 +213,19 @@ test('starts a FastAPI runtime session, detects drift, and renders evidence via 
               const reportRes = await fetch(`http://127.0.0.1:${port}/api/report`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify([
-                  { questionId: driftQuestion.id, decision: 'correct', answer: 'Use GET instead' }
-                ])
+                body: JSON.stringify({
+                  responses: [
+                    { questionId: driftQuestion.id, decision: 'correct', answer: 'Use GET instead' }
+                  ]
+                })
               });
               const reportBody = await reportRes.json();
               const report = reportBody.markdown;
               assert.match(report, /- \*\*Source evidence:\*\* main\.py:12/);
               assert.match(report, /- \*\*Runtime OpenAPI evidence:\*\* \[openapi-drift\] \/items\/{item_id} post/);
+              // Prove correct report response includes the answered decision and text
+              assert.match(report, /\*\*Decision:\*\* correct/);
+              assert.match(report, /Use GET instead/);
 
               child.kill('SIGTERM');
               resolve();

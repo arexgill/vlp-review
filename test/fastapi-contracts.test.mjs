@@ -16,7 +16,7 @@ test('produces method-drift question when static GET vs runtime POST', () => {
       }
     }
   };
-  
+
   const result = compareFastApiContracts({ prompt: '', staticContracts, openapi });
   assert.equal(result.length, 1);
   assert.equal(result[0].type, 'method-drift');
@@ -44,7 +44,7 @@ test('produces schema-drift question when response status/model mismatch', () =>
       }
     }
   };
-  
+
   const result = compareFastApiContracts({ prompt: '', staticContracts, openapi });
   assert.equal(result.length, 1);
   assert.equal(result[0].type, 'schema-drift');
@@ -57,6 +57,47 @@ test('produces safe runtime-diagnostic question on docker diagnostic', () => {
   assert.equal(result.length, 1);
   assert.equal(result[0].type, 'runtime-diagnostic');
   assert.equal(result[0].runtimeEvidence.message, 'Docker failed to start safely');
+});
+
+test('produces missing-route question when static route is absent from openapi', () => {
+  const staticContracts = [{
+    file: 'main.py',
+    lineStart: 10,
+    path: '/users',
+    methods: ['GET']
+  }];
+  const openapi = {
+    paths: {
+      '/items': { get: {} }
+    }
+  };
+
+  const result = compareFastApiContracts({ prompt: '', staticContracts, openapi });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].type, 'missing-route');
+  assert.deepEqual(result[0].sourceEvidence, { file: 'main.py', lineStart: 10, target: '/users' });
+  assert.equal(result[0].runtimeEvidence.type, 'openapi-missing');
+});
+
+test('produces path-drift question when variable names differ', () => {
+  const staticContracts = [{
+    file: 'main.py',
+    lineStart: 10,
+    path: '/items/{item_id}',
+    methods: ['GET']
+  }];
+  const openapi = {
+    paths: {
+      '/items/{id}': { get: {} }
+    }
+  };
+
+  const result = compareFastApiContracts({ prompt: '', staticContracts, openapi });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].type, 'path-drift');
+  assert.deepEqual(result[0].sourceEvidence, { file: 'main.py', lineStart: 10, target: '/items/{item_id}' });
+  assert.equal(result[0].runtimeEvidence.type, 'openapi-drift');
+  assert.equal(result[0].runtimeEvidence.actual, '/items/{id}');
 });
 
 test('produces no questions when matching contract', () => {
@@ -79,7 +120,7 @@ test('produces no questions when matching contract', () => {
       }
     }
   };
-  
+
   const result = compareFastApiContracts({ prompt: '', staticContracts, openapi });
   assert.equal(result.length, 0);
 });

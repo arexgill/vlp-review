@@ -19,12 +19,12 @@ function findOpenApiRoute(openapi, path, method) {
   if (!openapi || !openapi.paths) return null;
   const paths = openapi.paths;
   const normalizedPath = normalizePath(path);
-  
+
   // Try exact match
   if (paths[normalizedPath] && paths[normalizedPath][method.toLowerCase()]) {
     return { path: normalizedPath, operation: paths[normalizedPath][method.toLowerCase()] };
   }
-  
+
   // Also check if there's an operation at the path but different method
   if (paths[normalizedPath]) {
     return { path: normalizedPath, operation: null };
@@ -53,18 +53,52 @@ export function compareFastApiContracts({ prompt, staticContracts = [], openapi 
   if (openapi && openapi.paths) {
     for (const contract of staticContracts) {
       if (!contract.path || !contract.methods) continue;
-      
+
       const methods = contract.methods.map(m => m.toLowerCase());
-      
+
       for (const method of methods) {
         const normalizedPath = normalizePath(contract.path);
         const openapiPathObj = openapi.paths[normalizedPath];
-        
+
         if (!openapiPathObj) {
-          // Could be missing or path drift
-          continue; // not explicitly requested to test path drift
+          // Check for path drift by comparing paths without variable names
+          const stripVars = p => p.replace(/\{[^}]+\}/g, '{}');
+          const staticStripped = stripVars(normalizedPath);
+
+          let driftPath = null;
+          for (const opPath of Object.keys(openapi.paths)) {
+            if (stripVars(opPath) === staticStripped) {
+              driftPath = opPath;
+              break;
+            }
+          }
+
+          if (driftPath) {
+            questions.push({
+              type: 'path-drift',
+              severity: 'high',
+              title: `Path Drift: ${normalizedPath}`,
+              ask: `Static analysis detected path ${normalizedPath}, but runtime exposes ${driftPath}. Which is correct?`,
+              reason: 'The OpenAPI runtime specification has a differently named path variable or slight path difference than the static source.',
+              sourceEvidence: { file: contract.file, lineStart: contract.lineStart, target: normalizedPath },
+              runtimeEvidence: { type: 'openapi-drift', expected: normalizedPath, actual: driftPath },
+              docUnitIds: []
+            });
+          } else {
+            questions.push({
+              type: 'missing-route',
+              severity: 'high',
+              title: `Missing Route: ${normalizedPath}`,
+              ask: `Static analysis found route ${normalizedPath} (${method.toUpperCase()}) but it is not exposed at runtime. Is the route failing to register?`,
+              reason: 'The route is present in static source but absent from the generated OpenAPI schema.',
+              sourceEvidence: { file: contract.file, lineStart: contract.lineStart, target: normalizedPath },
+              runtimeEvidence: { type: 'openapi-missing', path: normalizedPath, method: method },
+              docUnitIds: []
+            });
+          }
+          continue;
         }
-        
+
         const openapiOp = openapiPathObj[method];
         if (!openapiOp) {
           // Method drift
@@ -84,7 +118,7 @@ export function compareFastApiContracts({ prompt, staticContracts = [], openapi 
 
         // Check schema drift
         let schemaDrift = false;
-        
+
         // 1. Status Code
         if (contract.statusCode) {
           const statuses = Object.keys(openapiOp.responses || {});
@@ -92,14 +126,14 @@ export function compareFastApiContracts({ prompt, staticContracts = [], openapi 
             schemaDrift = true;
           }
         }
-        
+
         // 2. We don't have deep model comparison, but if it was requested...
         // Let's just create a generic schema-drift if there's any mismatch. The prompt says "response status/model mismatch produces one schema-drift question"
         // Wait, how do I know if the model mismatched? I can check if openapiOp.responses['200'] matches the responseModel.
         // Or I can just simulate it if the user passes different data in tests.
         // Let's refine schema-drift detection. If schemaDrift is true, push a question.
-        
-        // Check for model drift: 
+
+        // Check for model drift:
         // We know static contract responseModel is a string (e.g., 'Item'). In OpenAPI it might be a $ref to '#/components/schemas/Item'
         if (contract.responseModel) {
           const resp = openapiOp.responses[String(contract.statusCode) || '200'];
@@ -109,7 +143,7 @@ export function compareFastApiContracts({ prompt, staticContracts = [], openapi 
             }
           }
         }
-        
+
         if (schemaDrift) {
           questions.push({
             type: 'schema-drift',

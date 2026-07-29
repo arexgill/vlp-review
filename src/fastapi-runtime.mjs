@@ -69,6 +69,10 @@ export async function collectFastApiOpenApi({ codePath, appTarget, runDocker, ti
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
+  // The build phase requires network access to acquire dependencies from PyPI.
+  // It receives strictly bounded input (requirements.txt content via stdin) and
+  // executes in a disposable container without project source mounts, host credentials,
+  // or build secrets. The subsequent runtime container is network-disabled.
   const dockerfile = `FROM python:3.11-slim
 WORKDIR /deps
 RUN echo "${Buffer.from(requirements).toString('base64')}" | base64 -d > requirements.txt
@@ -135,12 +139,12 @@ RUN pip install --no-cache-dir -r requirements.txt -t /deps
   }
 
   if (result.exitCode !== 0) {
-    return { 
-      openapi: null, 
-      diagnostic: { 
-        type: 'docker_error', 
-        message: `Docker process exited with code ${result.exitCode}` 
-      } 
+    return {
+      openapi: null,
+      diagnostic: {
+        type: 'docker_error',
+        message: `Docker process exited with code ${result.exitCode}`
+      }
     };
   }
 
